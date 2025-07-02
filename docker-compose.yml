@@ -1,0 +1,64 @@
+ # docker-compose.yml
+version: '3.8'
+
+services:
+  satellite-game:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: satellite-pursuit-evasion
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./results:/app/results
+      - ./data:/app/data
+    environment:
+      - PYTHONPATH=/app
+    stdin_open: true
+    tty: true
+    command: bash
+
+  satellite-game-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    container_name: satellite-pursuit-evasion-gpu
+    runtime: nvidia
+    volumes:
+      - ./models:/app/models
+      - ./logs:/app/logs
+      - ./results:/app/results
+      - ./data:/app/data
+    environment:
+      - PYTHONPATH=/app
+      - NVIDIA_VISIBLE_DEVICES=all
+    stdin_open: true
+    tty: true
+    command: bash
+
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: satellite-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/app/notebooks
+      - ./models:/app/models
+      - ./data:/app/data
+    environment:
+      - PYTHONPATH=/app
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token=''
+
+  tensorboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: satellite-tensorboard
+    ports:
+      - "6006:6006"
+    volumes:
+      - ./tensorboard_logs:/app/tensorboard_logs
+    command: tensorboard --logdir=/app/tensorboard_logs --host=0.0.0.0 --port=6006
+
