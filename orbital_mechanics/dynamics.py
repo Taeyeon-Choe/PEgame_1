@@ -8,7 +8,87 @@ from numba import jit
 from utils.constants import MU_EARTH, R_EARTH, J2_EARTH
 
 
-@jit(cache=True, nopython=False)
+@jit(nopython=True, cache=True)
+def _relative_dynamics_core(state: np.ndarray, r0: float, dot_theta0: float, ddot_theta0: float) -> np.ndarray:
+    """Core computation for relative dynamics without J2 perturbation."""
+    x, y, z, vx, vy, vz = state
+
+    rho_norm = np.sqrt((r0 + x) ** 2 + y**2 + z**2)
+    if rho_norm < 1e-10:
+        rho_norm = 1e-10
+
+    ddot_x = (
+        2 * dot_theta0 * vy
+        + ddot_theta0 * y
+        + dot_theta0**2 * x
+        - MU_EARTH * (r0 + x) / rho_norm**3
+        + MU_EARTH / r0**2
+    )
+    ddot_y = (
+        -2 * dot_theta0 * vx
+        - ddot_theta0 * x
+        + dot_theta0**2 * y
+        - MU_EARTH * y / rho_norm**3
+    )
+    ddot_z = -MU_EARTH * z / rho_norm**3
+
+    return np.array([vx, vy, vz, ddot_x, ddot_y, ddot_z])
+
+
+@jit(nopython=True, cache=True)
+def _j2_diff_accel_core(relative_pos: np.ndarray, r_evader: np.ndarray, v_evader: np.ndarray) -> np.ndarray:
+    """Core computation of differential J2 acceleration in the LVLH frame."""
+    x, y, z = relative_pos
+
+    r_evader_norm = np.sqrt(np.dot(r_evader, r_evader))
+    if r_evader_norm < 1e-10:
+        r_evader_norm = 1e-10
+
+    h_evader = np.cross(r_evader, v_evader)
+    h_evader_norm = np.sqrt(np.dot(h_evader, h_evader))
+    if h_evader_norm < 1e-10:
+        h_evader_norm = 1e-10
+
+    x_lvlh = r_evader / r_evader_norm
+    z_lvlh = h_evader / h_evader_norm
+    y_lvlh = np.cross(z_lvlh, x_lvlh)
+    y_lvlh_norm = np.sqrt(np.dot(y_lvlh, y_lvlh))
+    y_lvlh = y_lvlh / y_lvlh_norm
+
+    R_lvlh_to_eci = np.vstack((x_lvlh, y_lvlh, z_lvlh)).T
+
+    rel_vec = np.array([x, y, z])
+    r_pursuer_eci = r_evader + R_lvlh_to_eci @ rel_vec
+    r_pursuer_norm = np.sqrt(np.dot(r_pursuer_eci, r_pursuer_eci))
+    if r_pursuer_norm < 1e-10:
+        r_pursuer_norm = 1e-10
+
+    j2_factor_evader = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / r_evader_norm**4
+    term_evader = 5 * (r_evader[2] / r_evader_norm) ** 2 - 1
+    j2_accel_evader = j2_factor_evader * np.array(
+        [
+            r_evader[0] * term_evader,
+            r_evader[1] * term_evader,
+            r_evader[2] * (5 * (r_evader[2] / r_evader_norm) ** 2 - 3),
+        ]
+    )
+
+    j2_factor_pursuer = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / r_pursuer_norm**4
+    term_pursuer = 5 * (r_pursuer_eci[2] / r_pursuer_norm) ** 2 - 1
+    j2_accel_pursuer = j2_factor_pursuer * np.array(
+        [
+            r_pursuer_eci[0] * term_pursuer,
+            r_pursuer_eci[1] * term_pursuer,
+            r_pursuer_eci[2] * (5 * (r_pursuer_eci[2] / r_pursuer_norm) ** 2 - 3),
+        ]
+    )
+
+    j2_diff_accel_eci = j2_accel_pursuer - j2_accel_evader
+    j2_diff_accel_lvlh = R_lvlh_to_eci.T @ j2_diff_accel_eci
+
+    return j2_diff_accel_lvlh
+
+
 def relative_dynamics_evader_centered(
     t: float, state: List[float], evader_orbit
 ) -> List[float]:
@@ -25,7 +105,6 @@ def relative_dynamics_evader_centered(
     """
     x, y, z, vx, vy, vz = state
 
-    # NaN 체크
     if (
         np.isnan(x)
         or np.isnan(y)
@@ -37,46 +116,24 @@ def relative_dynamics_evader_centered(
         print(f"WARNING: NaN 값 감지됨! state = {state}")
         return [0, 0, 0, 0, 0, 0]
 
-    # 회피자 궤도 상태 가져오기
     evader_state = evader_orbit.get_state(t)
-    r0 = evader_state["r0"]
-    dot_theta0 = evader_state["dot_theta0"]
-    ddot_theta0 = evader_state["ddot_theta0"]
+    r0 = float(evader_state["r0"])
+    dot_theta0 = float(evader_state["dot_theta0"])
+    ddot_theta0 = float(evader_state["ddot_theta0"])
 
-    # 추격자의 절대 거리 계산
-    rho_norm = np.sqrt((r0 + x) ** 2 + y**2 + z**2)
-
-    # 수치적 안정성을 위한 체크
-    if rho_norm < 1e-10:
-        print(f"WARNING: rho_norm이 너무 작음: {rho_norm}")
-        rho_norm = 1e-10
-
-    # 기본 상대 운동 방정식 (비선형)
-    ddot_x = (
-        2 * dot_theta0 * vy
-        + ddot_theta0 * y
-        + dot_theta0**2 * x
-        - MU_EARTH * (r0 + x) / rho_norm**3
-        + MU_EARTH / r0**2
+    core_result = _relative_dynamics_core(
+        np.array([x, y, z, vx, vy, vz], dtype=np.float64),
+        r0,
+        dot_theta0,
+        ddot_theta0,
     )
-    ddot_y = (
-        -2 * dot_theta0 * vx
-        - ddot_theta0 * x
-        + dot_theta0**2 * y
-        - MU_EARTH * y / rho_norm**3
-    )
-    ddot_z = -MU_EARTH * z / rho_norm**3
 
-    # J2 섭동 효과 추가
     j2_accel = compute_j2_differential_acceleration(t, state, evader_orbit)
-    ddot_x += j2_accel[0]
-    ddot_y += j2_accel[1]
-    ddot_z += j2_accel[2]
+    core_result[3:] += j2_accel
 
-    return [vx, vy, vz, ddot_x, ddot_y, ddot_z]
+    return core_result.tolist()
 
 
-@jit(cache=True, nopython=False)
 def compute_j2_differential_acceleration(
     t: float, state: List[float], evader_orbit
 ) -> np.ndarray:
@@ -91,66 +148,10 @@ def compute_j2_differential_acceleration(
     Returns:
         J2 차등 가속도 벡터 (LVLH 좌표계)
     """
-    x, y, z = state[:3]
-
-    # 회피자와 추격자의 ECI 위치 계산
     r_evader, v_evader = evader_orbit.get_position_velocity(t)
-    r_evader_norm = np.linalg.norm(r_evader)
+    relative_pos = np.array(state[:3], dtype=np.float64)
 
-    # 수치적 안정성 체크
-    if r_evader_norm < 1e-10:
-        r_evader_norm = 1e-10
-
-    # LVLH 좌표계 정의
-    h_evader = np.cross(r_evader, v_evader)
-    h_evader_norm = np.linalg.norm(h_evader)
-
-    if h_evader_norm < 1e-10:
-        h_evader_norm = 1e-10
-
-    # LVLH 기저 벡터
-    x_lvlh = r_evader / r_evader_norm
-    z_lvlh = h_evader / h_evader_norm
-    y_lvlh = np.cross(z_lvlh, x_lvlh)
-    y_lvlh = y_lvlh / np.linalg.norm(y_lvlh)
-
-    # LVLH -> ECI 변환 행렬
-    R_lvlh_to_eci = np.vstack((x_lvlh, y_lvlh, z_lvlh)).T
-
-    # 추격자의 ECI 위치
-    r_pursuer_eci = r_evader + R_lvlh_to_eci @ np.array([x, y, z])
-    r_pursuer_norm = np.linalg.norm(r_pursuer_eci)
-
-    if r_pursuer_norm < 1e-10:
-        r_pursuer_norm = 1e-10
-
-    # J2 가속도 계산 (회피자)
-    j2_factor_evader = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / r_evader_norm**4
-    j2_accel_evader = j2_factor_evader * np.array(
-        [
-            r_evader[0] * (5 * (r_evader[2] / r_evader_norm) ** 2 - 1),
-            r_evader[1] * (5 * (r_evader[2] / r_evader_norm) ** 2 - 1),
-            r_evader[2] * (5 * (r_evader[2] / r_evader_norm) ** 2 - 3),
-        ]
-    )
-
-    # J2 가속도 계산 (추격자)
-    j2_factor_pursuer = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / r_pursuer_norm**4
-    j2_accel_pursuer = j2_factor_pursuer * np.array(
-        [
-            r_pursuer_eci[0] * (5 * (r_pursuer_eci[2] / r_pursuer_norm) ** 2 - 1),
-            r_pursuer_eci[1] * (5 * (r_pursuer_eci[2] / r_pursuer_norm) ** 2 - 1),
-            r_pursuer_eci[2] * (5 * (r_pursuer_eci[2] / r_pursuer_norm) ** 2 - 3),
-        ]
-    )
-
-    # 차등 가속도 (ECI)
-    j2_diff_accel_eci = j2_accel_pursuer - j2_accel_evader
-
-    # ECI -> LVLH 변환
-    j2_diff_accel_lvlh = R_lvlh_to_eci.T @ j2_diff_accel_eci
-
-    return j2_diff_accel_lvlh
+    return _j2_diff_accel_core(relative_pos, r_evader.astype(np.float64), v_evader.astype(np.float64))
 
 
 def hcw_dynamics(t: float, state: List[float], n: float) -> List[float]:
