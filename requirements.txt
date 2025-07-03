@@ -2,7 +2,7 @@
 torch>=2.0.0,<2.2.0
 stable-baselines3>=2.0.0,<2.3.0
 gymnasium>=0.28.0,<0.30.0
-shimmy>=2.0.0
+shimmy>=1.0.0,<2.0.0
 
 # Scientific Computing
 numpy>=1.21.0,<1.24.0
