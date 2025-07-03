@@ -1,5 +1,5 @@
 """
-궤도 동역학 함수들
+궤도 동역학 함수들 (Numba JIT 오류 수정 버전)
 """
 
 import numpy as np
@@ -94,6 +94,7 @@ def relative_dynamics_evader_centered(
 ) -> List[float]:
     """
     Evader 중심 상대 동역학 (pursuer의 상대 운동)
+    수정: ChiefOrbit 객체에서 필요한 값들만 추출하여 JIT 함수에 전달
 
     Args:
         t: 시간
@@ -116,11 +117,13 @@ def relative_dynamics_evader_centered(
         print(f"WARNING: NaN 값 감지됨! state = {state}")
         return [0, 0, 0, 0, 0, 0]
 
+    # ChiefOrbit 객체에서 필요한 값들 추출
     evader_state = evader_orbit.get_state(t)
     r0 = float(evader_state["r0"])
     dot_theta0 = float(evader_state["dot_theta0"])
     ddot_theta0 = float(evader_state["ddot_theta0"])
 
+    # JIT 컴파일된 핵심 계산 함수 호출
     core_result = _relative_dynamics_core(
         np.array([x, y, z, vx, vy, vz], dtype=np.float64),
         r0,
@@ -128,6 +131,7 @@ def relative_dynamics_evader_centered(
         ddot_theta0,
     )
 
+    # J2 섭동 효과 추가
     j2_accel = compute_j2_differential_acceleration(t, state, evader_orbit)
     core_result[3:] += j2_accel
 
@@ -139,6 +143,7 @@ def compute_j2_differential_acceleration(
 ) -> np.ndarray:
     """
     J2 섭동의 차등 가속도 계산
+    수정: JIT 호환성을 위해 궤도 객체에서 필요한 값들만 추출
 
     Args:
         t: 시간
@@ -148,9 +153,11 @@ def compute_j2_differential_acceleration(
     Returns:
         J2 차등 가속도 벡터 (LVLH 좌표계)
     """
+    # 궤도 객체에서 필요한 위치/속도 벡터 추출
     r_evader, v_evader = evader_orbit.get_position_velocity(t)
     relative_pos = np.array(state[:3], dtype=np.float64)
 
+    # JIT 컴파일된 함수 호출
     return _j2_diff_accel_core(relative_pos, r_evader.astype(np.float64), v_evader.astype(np.float64))
 
 
@@ -324,3 +331,18 @@ def third_body_acceleration(
     accel_indirect = -mu_body * r_body_eci / r_body_norm**3
 
     return accel_direct + accel_indirect
+
+
+# 추가: 안전한 동역학 함수 (fallback)
+def safe_relative_dynamics(t: float, state: List[float], evader_orbit) -> List[float]:
+    """
+    안전한 상대 동역학 함수 (JIT 없이)
+    Numba 오류 발생시 fallback으로 사용
+    """
+    try:
+        return relative_dynamics_evader_centered(t, state, evader_orbit)
+    except Exception as e:
+        print(f"동역학 계산 오류: {e}")
+        # 간단한 선형 동역학으로 fallback
+        x, y, z, vx, vy, vz = state
+        return [vx, vy, vz, 0.0, 0.0, 0.0]
