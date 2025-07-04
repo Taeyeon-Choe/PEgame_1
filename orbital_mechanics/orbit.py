@@ -3,7 +3,7 @@
 """
 
 import numpy as np
-from scipy.optimize import fsolve
+from scipy.optimize import fsolve, newton
 from typing import Dict, Tuple
 from utils.constants import MU_EARTH
 
@@ -50,57 +50,140 @@ class ChiefOrbit:
         """케플러 방정식: E - e*sin(E) = M"""
         return E - self.e * np.sin(E) - M
 
+    def kepler_equation_derivative(self, E: float) -> float:
+        """케플러 방정식의 도함수"""
+        return 1 - self.e * np.cos(E)
+
     def get_M(self, t: float) -> float:
         """시간 t에서의 평균 근점이각 계산"""
         return self.M0 + self.n * t
 
     def get_E(self, t: float) -> float:
-        """시간 t에서의 이심근점이각(Eccentric Anomaly) 계산"""
+        """시간 t에서의 이심근점이각(Eccentric Anomaly) 계산 - 개선된 버전"""
         M = self.get_M(t)
-
-        # 초기값 개선
-        if self.e < 0.8:
-            E0 = M  # 이심률이 낮을 때는 M이 좋은 초기값
-        else:
-            E0 = np.pi  # 이심률이 높을 때는 π가 더 나은 초기값
-
-        try:
-            E = fsolve(self.kepler_equation, E0, args=(M,))[0]
-        except:
-            # fsolve 실패 시 Newton-Raphson 방법 사용
-            E = self._solve_kepler_newton_raphson(M, E0)
-
-        return E
+        
+        # M을 [0, 2π] 범위로 정규화
+        M = M % (2 * np.pi)
+        
+        # 이심률에 따른 방법 선택
+        if self.e < 1e-8:  # 거의 원궤도
+            return M
+        elif self.e < 0.2:  # 낮은 이심률 - Newton-Raphson
+            E0 = M
+            return self._solve_kepler_newton_raphson(M, E0)
+        elif self.e < 0.9:  # 중간 이심률 - 개선된 초기값으로 Newton-Raphson
+            # Danby의 초기값 추정
+            E0 = M + self.e * np.sin(M) / (1 - np.sin(M + self.e) + np.sin(M))
+            return self._solve_kepler_newton_raphson(M, E0)
+        else:  # 높은 이심률 - Halley's method
+            E0 = M if M < np.pi else np.pi
+            return self._solve_kepler_halley(M, E0)
 
     def _solve_kepler_newton_raphson(
-        self, M: float, E0: float, max_iter: int = 20, tol: float = 1e-12
+        self, M: float, E0: float, max_iter: int = 50, tol: float = 1e-12
     ) -> float:
         """Newton-Raphson 방법으로 케플러 방정식 해결"""
         E = E0
-        for _ in range(max_iter):
+        for i in range(max_iter):
             f = E - self.e * np.sin(E) - M
             df = 1 - self.e * np.cos(E)
 
             if abs(df) < 1e-14:  # 분모가 0에 가까운 경우
-                break
+                # Halley's method로 전환
+                return self._solve_kepler_halley(M, E, max_iter=max_iter-i)
 
             E_new = E - f / df
 
             if abs(E_new - E) < tol:
-                break
+                return E_new
 
             E = E_new
 
-        return E
+        # 수렴 실패 시 더 안정적인 방법 시도
+        return self._solve_kepler_bisection(M)
+
+    def _solve_kepler_halley(
+        self, M: float, E0: float, max_iter: int = 50, tol: float = 1e-12
+    ) -> float:
+        """Halley's method로 케플러 방정식 해결 (높은 이심률용)"""
+        E = E0
+        for i in range(max_iter):
+            sin_E = np.sin(E)
+            cos_E = np.cos(E)
+            
+            f = E - self.e * sin_E - M
+            df = 1 - self.e * cos_E
+            ddf = self.e * sin_E
+            
+            if abs(df) < 1e-14:
+                return self._solve_kepler_bisection(M)
+            
+            # Halley's method
+            numerator = 2 * f * df
+            denominator = 2 * df * df - f * ddf
+            
+            if abs(denominator) < 1e-14:
+                # Newton's method로 대체
+                E_new = E - f / df
+            else:
+                E_new = E - numerator / denominator
+            
+            if abs(E_new - E) < tol:
+                return E_new
+            
+            E = E_new
+        
+        # 수렴 실패 시 이분법 사용
+        return self._solve_kepler_bisection(M)
+
+    def _solve_kepler_bisection(self, M: float, tol: float = 1e-12) -> float:
+        """이분법으로 케플러 방정식 해결 (가장 안정적이지만 느림)"""
+        # M에 따른 구간 설정
+        if M < np.pi:
+            a, b = M - self.e, M + self.e
+        else:
+            a, b = M - self.e, M + self.e
+        
+        # 구간이 [0, 2π]를 벗어나지 않도록 조정
+        a = max(0, a)
+        b = min(2 * np.pi, b)
+        
+        # 이분법
+        max_iter = 100
+        for _ in range(max_iter):
+            E = (a + b) / 2
+            f = E - self.e * np.sin(E) - M
+            
+            if abs(f) < tol:
+                return E
+            
+            if f < 0:
+                a = E
+            else:
+                b = E
+        
+        return (a + b) / 2
 
     def get_f(self, t: float) -> float:
         """시간 t에서의 참 근점이각(True Anomaly) 계산"""
         E = self.get_E(t)
 
         # 수치적 안정성 개선
-        return 2 * np.arctan2(
-            np.sqrt(1 + self.e) * np.sin(E / 2), np.sqrt(1 - self.e) * np.cos(E / 2)
-        )
+        if self.e < 1e-8:  # 거의 원궤도
+            return E
+        else:
+            # 표준 공식 사용
+            sin_half_E = np.sin(E / 2)
+            cos_half_E = np.cos(E / 2)
+            
+            if abs(cos_half_E) < 1e-10:
+                # E가 π에 가까운 경우 특별 처리
+                return np.pi
+            
+            return 2 * np.arctan2(
+                np.sqrt(1 + self.e) * sin_half_E,
+                np.sqrt(1 - self.e) * cos_half_E
+            )
 
     def get_state(self, t: float) -> Dict[str, float]:
         """시간 t에서의 궤도 상태 계산"""
