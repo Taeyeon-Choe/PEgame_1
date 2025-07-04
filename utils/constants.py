@@ -54,7 +54,7 @@ TRAINING_PARAMS = {
     "batch_size": 512,
     "tau": 0.005,
     "gamma": 0.98,
-    "net_arch": [256, 256, 256],
+    "net_arch": [512, 512, 512],
     "save_freq": 10000,
     "n_envs": multiprocessing.cpu_count(),
 }
