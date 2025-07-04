@@ -1,5 +1,5 @@
 """
-학습 콜백 함수들
+학습 콜백 함수들 - 벡터 환경 지원 버전
 """
 
 import numpy as np
@@ -16,7 +16,7 @@ from analysis.visualization import plot_training_progress
 
 
 class EvasionTrackingCallback(BaseCallback):
-    """회피 결과 추적 콜백 (Zero-Sum 게임 메트릭 추가 & Nash Equilibrium 개선)"""
+    """회피 결과 추적 콜백 (벡터 환경 지원)"""
     
     def __init__(self, verbose=0, window_size=100, log_dir=None):
         super().__init__(verbose)
@@ -56,62 +56,89 @@ class EvasionTrackingCallback(BaseCallback):
         self.eval_frequency = ANALYSIS_PARAMS['eval_frequency']
     
     def _on_step(self):
-        """에피소드 종료 시 처리"""
+        """에피소드 종료 시 처리 - 벡터 환경 지원"""
         dones = self.locals.get('dones')
-        if dones and dones[0]:  # 단일 환경 가정
-            info = self.locals.get('infos')[0]
-            env = self.training_env.envs[0].unwrapped
-            
-            if 'outcome' in info:
-                outcome = info['outcome']
-                self.outcomes.append(outcome)
-                self.episode_count += 1
-                
-                # 결과별 카운트 증가
-                self._update_outcome_counts(outcome)
-                
-                # 성공 여부 계산
-                success = outcome in ['permanent_evasion', 'conditional_evasion', 'evaded', 'max_steps_reached']
-                self.success_window.append(float(success))
-                
-                # 버퍼 시간 통계 추적
-                if 'buffer_time' in info:
-                    self.buffer_time_stats.append(info['buffer_time'])
-                
-                # Zero-Sum 게임 보상 기록
-                evader_reward = info.get('evader_reward', 0)
-                pursuer_reward = info.get('pursuer_reward', -evader_reward)
-                self.evader_rewards.append(evader_reward)
-                self.pursuer_rewards.append(pursuer_reward)
-                
-                # Nash Equilibrium 메트릭 계산
-                if self.episode_count % self.eval_frequency == 0:
-                    nash_metric = self.evaluate_nash_equilibrium(env)
-                    self.nash_equilibrium_metrics.append(nash_metric)
-                    
-                    # 정책 저장
-                    if len(self.policy_history) < 5:
-                        self.policy_history.append(
-                            copy.deepcopy(self.model.policy.state_dict())
-                        )
-                
-                # 이동 평균 성공률 계산
-                if len(self.success_window) > 0:
-                    success_rate = sum(self.success_window) / len(self.success_window)
-                    self.success_rates.append(success_rate)
-                    
-                    # 에피소드 정보 기록
-                    self._record_episode_info(env, outcome, success, evader_reward, pursuer_reward, info)
-                    
-                    # 로그 출력
-                    if self.episode_count % 100 == 0:
-                        self._print_progress_log(success_rate, env)
-                        self.plot_interim_results()
-                
-                # Tensorboard 로깅
-                self._log_to_tensorboard(success_rate)
+        infos = self.locals.get('infos')
+        
+        if dones is None or infos is None:
+            return True
+        
+        # 벡터 환경인지 확인
+        is_vectorized = isinstance(dones, np.ndarray)
+        
+        if is_vectorized:
+            # 벡터 환경 처리
+            for i, done in enumerate(dones):
+                if done:
+                    self._process_episode_end(infos[i], i)
+        else:
+            # 단일 환경 처리
+            if dones:
+                self._process_episode_end(infos, 0)
         
         return True
+    
+    def _process_episode_end(self, info, env_idx):
+        """에피소드 종료 처리"""
+        # 환경 접근 (벡터 환경과 단일 환경 모두 지원)
+        if hasattr(self.training_env, 'envs'):
+            # 벡터 환경
+            if hasattr(self.training_env.envs[env_idx], 'unwrapped'):
+                env = self.training_env.envs[env_idx].unwrapped
+            else:
+                env = self.training_env.envs[env_idx]
+        else:
+            # 단일 환경
+            env = self.training_env.unwrapped if hasattr(self.training_env, 'unwrapped') else self.training_env
+        
+        if 'outcome' in info:
+            outcome = info['outcome']
+            self.outcomes.append(outcome)
+            self.episode_count += 1
+            
+            # 결과별 카운트 증가
+            self._update_outcome_counts(outcome)
+            
+            # 성공 여부 계산
+            success = outcome in ['permanent_evasion', 'conditional_evasion', 'evaded', 'max_steps_reached']
+            self.success_window.append(float(success))
+            
+            # 버퍼 시간 통계 추적
+            if 'buffer_time' in info:
+                self.buffer_time_stats.append(info['buffer_time'])
+            
+            # Zero-Sum 게임 보상 기록
+            evader_reward = info.get('evader_reward', 0)
+            pursuer_reward = info.get('pursuer_reward', -evader_reward)
+            self.evader_rewards.append(evader_reward)
+            self.pursuer_rewards.append(pursuer_reward)
+            
+            # Nash Equilibrium 메트릭 계산
+            if self.episode_count % self.eval_frequency == 0:
+                nash_metric = self.evaluate_nash_equilibrium(env)
+                self.nash_equilibrium_metrics.append(nash_metric)
+                
+                # 정책 저장
+                if len(self.policy_history) < 5:
+                    self.policy_history.append(
+                        copy.deepcopy(self.model.policy.state_dict())
+                    )
+            
+            # 이동 평균 성공률 계산
+            if len(self.success_window) > 0:
+                success_rate = sum(self.success_window) / len(self.success_window)
+                self.success_rates.append(success_rate)
+                
+                # 에피소드 정보 기록
+                self._record_episode_info(env, outcome, success, evader_reward, pursuer_reward, info)
+                
+                # 로그 출력
+                if self.episode_count % 100 == 0:
+                    self._print_progress_log(success_rate, env)
+                    self.plot_interim_results()
+            
+            # Tensorboard 로깅
+            self._log_to_tensorboard(success_rate if 'success_rate' in locals() else 0.0)
     
     def _update_outcome_counts(self, outcome):
         """결과별 카운트 업데이트"""
@@ -138,15 +165,21 @@ class EvasionTrackingCallback(BaseCallback):
             'episode': self.episode_count,
             'outcome': outcome,
             'success': success,
-            'evader_elements': env.initial_evader_orbital_elements,
-            'pursuer_elements': env.initial_pursuer_orbital_elements,
-            'initial_distance': env.initial_relative_distance,
-            'final_distance': getattr(env, 'final_relative_distance', None),
             'evader_reward': evader_reward,
             'pursuer_reward': pursuer_reward,
             'nash_metric': self.nash_equilibrium_metrics[-1] if self.nash_equilibrium_metrics else 0,
             'buffer_time': info.get('buffer_time', 0)
         }
+        
+        # 환경의 초기 조건 정보가 있으면 추가
+        if hasattr(env, 'initial_evader_orbital_elements'):
+            episode_info.update({
+                'evader_elements': env.initial_evader_orbital_elements,
+                'pursuer_elements': env.initial_pursuer_orbital_elements,
+                'initial_distance': env.initial_relative_distance,
+                'final_distance': getattr(env, 'final_relative_distance', None),
+            })
+        
         self.episodes_info.append(episode_info)
     
     def _print_progress_log(self, success_rate, env):
@@ -167,15 +200,19 @@ class EvasionTrackingCallback(BaseCallback):
                   f"{np.mean(self.pursuer_rewards[-100:]):.4f}")
             print(f"  - Zero-Sum 검증: {np.mean(self.evader_rewards[-100:]) + np.mean(self.pursuer_rewards[-100:]):.6f}")
         
-        # 최근 에피소드의 초기 조건 출력
-        self._print_orbital_elements(env)
+        # 최근 에피소드의 초기 조건 출력 (선택적)
+        if hasattr(env, 'initial_evader_orbital_elements'):
+            self._print_orbital_elements(env)
     
     def _print_orbital_elements(self, env):
         """궤도 요소 정보 출력"""
-        if not self.episodes_info:
+        if not self.episodes_info or not hasattr(env, 'initial_evader_orbital_elements'):
             return
         
         latest_info = self.episodes_info[-1]
+        if 'evader_elements' not in latest_info:
+            return
+            
         evader_elements = latest_info['evader_elements']
         pursuer_elements = latest_info['pursuer_elements']
         
@@ -184,33 +221,14 @@ class EvasionTrackingCallback(BaseCallback):
         print(f"    - 반장축(a): {evader_elements['a']/1000:.2f} km")
         print(f"    - 이심률(e): {evader_elements['e']:.6f}")
         print(f"    - 경사각(i): {evader_elements['i']*180/np.pi:.4f} deg")
-        print(f"    - 승교점 적경(RAAN): {evader_elements['RAAN']*180/np.pi:.4f} deg")
-        print(f"    - 근점 편각(omega): {evader_elements['omega']*180/np.pi:.4f} deg")
-        print(f"    - 평균 근점이각(M): {evader_elements['M']*180/np.pi:.4f} deg")
         
         print("  추격자 궤도 요소:")
         print(f"    - 반장축(a): {pursuer_elements['a']/1000:.2f} km")
         print(f"    - 이심률(e): {pursuer_elements['e']:.6f}")
         print(f"    - 경사각(i): {pursuer_elements['i']*180/np.pi:.4f} deg")
-        print(f"    - 승교점 적경(RAAN): {pursuer_elements['RAAN']*180/np.pi:.4f} deg")
-        print(f"    - 근점 편각(omega): {pursuer_elements['omega']*180/np.pi:.4f} deg")
-        print(f"    - 평균 근점이각(M): {pursuer_elements['M']*180/np.pi:.4f} deg")
         
-        # 궤도 요소 차이 계산
-        print("\n궤도 요소 차이 (추격자 - 회피자):")
-        print(f"    - 반장축 차이: {(pursuer_elements['a'] - evader_elements['a'])/1000:.2f} km "
-              f"({(pursuer_elements['a']/evader_elements['a'] - 1)*100:.4f}%)")
-        print(f"    - 이심률 차이: {pursuer_elements['e'] - evader_elements['e']:.6f}")
-        print(f"    - 경사각 차이: {(pursuer_elements['i'] - evader_elements['i'])*180/np.pi:.4f} deg")
-        print(f"    - RAAN 차이: {(pursuer_elements['RAAN'] - evader_elements['RAAN'])*180/np.pi:.4f} deg")
-        print(f"    - 근점 편각 차이: {(pursuer_elements['omega'] - evader_elements['omega'])*180/np.pi:.4f} deg")
-        print(f"    - 평균 근점이각 차이: {(pursuer_elements['M'] - evader_elements['M'])*180/np.pi:.4f} deg")
-        
-        print(f"\n  초기 상대 거리: {latest_info['initial_distance']:.2f} m")
-        if latest_info['final_distance'] is not None:
-            print(f"  최종 상대 거리: {latest_info['final_distance']:.2f} m")
-        else:
-            print(f"  최종 상대 거리: 아직 계산되지 않음")
+        print(f"\n  초기 상대 거리: {latest_info.get('initial_distance', 0):.2f} m")
+        print(f"  최종 상대 거리: {latest_info.get('final_distance', 'N/A')}")
         print(f"  결과: {latest_info['outcome'].upper()}")
         print("\n" + "="*70)
     
@@ -218,13 +236,13 @@ class EvasionTrackingCallback(BaseCallback):
         """Tensorboard에 로깅"""
         if hasattr(self, 'logger') and self.logger is not None:
             self.logger.record("evasion/success_rate", success_rate)
-            self.logger.record("evasion/capture_rate", self.captures / self.episode_count)
-            self.logger.record("evasion/evade_rate", self.evasions / self.episode_count)
+            self.logger.record("evasion/capture_rate", self.captures / max(self.episode_count, 1))
+            self.logger.record("evasion/evade_rate", self.evasions / max(self.episode_count, 1))
             
             # 세분화된 회피 결과 로깅
-            self.logger.record("evasion/permanent_evasion_rate", self.permanent_evasions / self.episode_count)
-            self.logger.record("evasion/conditional_evasion_rate", self.conditional_evasions / self.episode_count)
-            self.logger.record("evasion/temporary_evasion_rate", self.temporary_evasions / self.episode_count)
+            self.logger.record("evasion/permanent_evasion_rate", self.permanent_evasions / max(self.episode_count, 1))
+            self.logger.record("evasion/conditional_evasion_rate", self.conditional_evasions / max(self.episode_count, 1))
+            self.logger.record("evasion/temporary_evasion_rate", self.temporary_evasions / max(self.episode_count, 1))
             
             # Zero-Sum 게임 메트릭 로깅
             if len(self.evader_rewards) > 0:
@@ -321,15 +339,24 @@ class EvasionTrackingCallback(BaseCallback):
         sizes = [self.captures, self.permanent_evasions, self.conditional_evasions, 
                 self.fuel_depleted, self.max_steps]
         
-        plt.figure(figsize=(10, 10))
-        plt.pie(sizes, labels=labels, autopct='%1.1f%%')
-        plt.title('학습 완료 시 결과 분포')
-        plt.savefig(f'{self.log_dir}/final_outcome_distribution.png')
-        plt.close()
+        # 0이 아닌 값들만 필터링
+        filtered_sizes = []
+        filtered_labels = []
+        for size, label in zip(sizes, labels):
+            if size > 0:
+                filtered_sizes.append(size)
+                filtered_labels.append(label)
+        
+        if filtered_sizes:
+            plt.figure(figsize=(10, 10))
+            plt.pie(filtered_sizes, labels=filtered_labels, autopct='%1.1f%%')
+            plt.title('학습 완료 시 결과 분포')
+            plt.savefig(f'{self.log_dir}/final_outcome_distribution.png')
+            plt.close()
 
 
 class PerformanceCallback(BaseCallback):
-    """성능 모니터링 콜백"""
+    """성능 모니터링 콜백 - 벡터 환경 지원"""
     
     def __init__(self, eval_freq=1000, verbose=0):
         super().__init__(verbose)
@@ -349,7 +376,7 @@ class PerformanceCallback(BaseCallback):
 
 
 class ModelSaveCallback(BaseCallback):
-    """모델 저장 콜백"""
+    """모델 저장 콜백 - 벡터 환경 지원"""
     
     def __init__(self, save_freq=10000, save_path="./models/", name_prefix="model", verbose=0):
         super().__init__(verbose)
@@ -371,7 +398,7 @@ class ModelSaveCallback(BaseCallback):
 
 
 class EarlyStoppingCallback(BaseCallback):
-    """조기 종료 콜백"""
+    """조기 종료 콜백 - 벡터 환경 지원"""
     
     def __init__(self, target_success_rate=0.8, patience=5000, verbose=0):
         super().__init__(verbose)
@@ -379,30 +406,39 @@ class EarlyStoppingCallback(BaseCallback):
         self.patience = patience
         self.best_success_rate = 0.0
         self.steps_since_improvement = 0
+        self.callback_tracker = None
+        
+    def _on_training_start(self) -> None:
+        """학습 시작 시 EvasionTrackingCallback 찾기"""
+        # 다른 콜백들 중에서 EvasionTrackingCallback 찾기
+        if hasattr(self.model, '_callback'):
+            if hasattr(self.model._callback, 'callbacks'):
+                for callback in self.model._callback.callbacks:
+                    if isinstance(callback, EvasionTrackingCallback):
+                        self.callback_tracker = callback
+                        break
         
     def _on_step(self):
-        # 성공률 체크 (100 에피소드마다)
-        if hasattr(self.training_env.envs[0], 'unwrapped'):
-            env = self.training_env.envs[0].unwrapped
-            if hasattr(env, 'success_rates') and len(env.success_rates) > 0:
-                current_success_rate = env.success_rates[-1]
-                
-                if current_success_rate > self.best_success_rate:
-                    self.best_success_rate = current_success_rate
-                    self.steps_since_improvement = 0
-                else:
-                    self.steps_since_improvement += 1
-                
-                # 목표 달성 시 조기 종료
-                if current_success_rate >= self.target_success_rate:
-                    if self.verbose > 0:
-                        print(f"목표 성공률 달성: {current_success_rate:.2%}")
-                    return False
-                
-                # 개선이 없을 시 조기 종료
-                if self.steps_since_improvement >= self.patience:
-                    if self.verbose > 0:
-                        print(f"성능 개선 없음으로 조기 종료. 최고 성공률: {self.best_success_rate:.2%}")
-                    return False
+        # EvasionTrackingCallback에서 성공률 정보 가져오기
+        if self.callback_tracker and len(self.callback_tracker.success_rates) > 0:
+            current_success_rate = self.callback_tracker.success_rates[-1]
+            
+            if current_success_rate > self.best_success_rate:
+                self.best_success_rate = current_success_rate
+                self.steps_since_improvement = 0
+            else:
+                self.steps_since_improvement += 1
+            
+            # 목표 달성 시 조기 종료
+            if current_success_rate >= self.target_success_rate:
+                if self.verbose > 0:
+                    print(f"목표 성공률 달성: {current_success_rate:.2%}")
+                return False
+            
+            # 개선이 없을 시 조기 종료
+            if self.steps_since_improvement >= self.patience:
+                if self.verbose > 0:
+                    print(f"성능 개선 없음으로 조기 종료. 최고 성공률: {self.best_success_rate:.2%}")
+                return False
         
         return True
