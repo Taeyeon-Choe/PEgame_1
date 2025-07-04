@@ -1,12 +1,16 @@
 """
-시각화 및 그래프 생성 모듈
+시각화 및 그래프 생성 모듈 (데이터 저장 개선)
 """
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')  # GUI 없는 환경에서 사용
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from typing import List, Dict, Optional, Tuple, Any
 import os
+import json
+import csv
 
 from utils.constants import PLOT_PARAMS, SAFETY_THRESHOLDS
 
@@ -18,6 +22,34 @@ def setup_matplotlib():
     plt.rcParams['figure.dpi'] = PLOT_PARAMS['dpi']
     plt.rcParams['font.size'] = 10
     plt.rcParams['axes.grid'] = True
+    plt.rcParams['savefig.bbox'] = 'tight'
+    plt.rcParams['savefig.pad_inches'] = 0.1
+
+
+def save_data_to_csv(data: Dict[str, List], filepath: str):
+    """데이터를 CSV 파일로 저장"""
+    if not data:
+        return
+    
+    # 키를 헤더로 사용
+    headers = list(data.keys())
+    
+    # 모든 리스트의 길이 확인
+    max_length = max(len(data[key]) for key in headers)
+    
+    # CSV 작성
+    with open(filepath, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(headers)
+        
+        for i in range(max_length):
+            row = []
+            for header in headers:
+                if i < len(data[header]):
+                    row.append(data[header][i])
+                else:
+                    row.append('')  # 빈 값
+            writer.writerow(row)
 
 
 def plot_training_progress(success_rates: List[float],
@@ -31,6 +63,17 @@ def plot_training_progress(success_rates: List[float],
     """학습 진행 상황 시각화"""
     setup_matplotlib()
     
+    # 저장 디렉토리 생성
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # 데이터 저장을 위한 딕셔너리
+    training_data = {
+        'episode': list(range(len(success_rates))),
+        'success_rate': success_rates,
+        'evader_reward': evader_rewards[-len(success_rates):] if len(evader_rewards) >= len(success_rates) else evader_rewards,
+        'pursuer_reward': pursuer_rewards[-len(success_rates):] if len(pursuer_rewards) >= len(success_rates) else pursuer_rewards,
+    }
+    
     # 1. 성공률 그래프
     if success_rates:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
@@ -39,11 +82,16 @@ def plot_training_progress(success_rates: List[float],
         plt.xlabel('에피소드')
         plt.ylabel('성공률')
         plt.title(f'학습 과정 성공률 (에피소드 {episode_count})')
-        plt.grid(True)
+        plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
         plt.legend()
-        plt.savefig(f'{save_dir}/success_rate_ep{episode_count}.png')
+        plt.tight_layout()
+        plt.savefig(f'{save_dir}/success_rate_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
+        
+        # 성공률 데이터 저장
+        save_data_to_csv({'episode': list(range(len(success_rates))), 'success_rate': success_rates}, 
+                        f'{save_dir}/success_rate_data.csv')
     
     # 2. 결과 분포 파이 차트
     if outcome_counts and sum(outcome_counts) > 0:
@@ -58,19 +106,30 @@ def plot_training_progress(success_rates: List[float],
         
         if filtered_counts:
             plt.figure(figsize=(10, 10))
-            plt.pie(filtered_counts, labels=filtered_labels, autopct='%1.1f%%')
+            colors = plt.cm.Set3(np.linspace(0, 1, len(filtered_counts)))
+            wedges, texts, autotexts = plt.pie(filtered_counts, labels=filtered_labels, 
+                                               autopct='%1.1f%%', colors=colors,
+                                               startangle=90)
             plt.title(f'결과 분포 (에피소드 {episode_count})')
-            plt.savefig(f'{save_dir}/outcome_distribution_ep{episode_count}.png')
+            plt.tight_layout()
+            plt.savefig(f'{save_dir}/outcome_distribution_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
             plt.close()
+            
+            # 결과 분포 데이터 저장
+            outcome_data = {label: count for label, count in zip(filtered_labels, filtered_counts)}
+            with open(f'{save_dir}/outcome_distribution.json', 'w') as f:
+                json.dump(outcome_data, f, indent=2)
     
     # 3. Zero-Sum 게임 보상 그래프
     if len(evader_rewards) > 100:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
         episodes = range(len(evader_rewards))
+        
+        # 원시 데이터 (투명하게)
         plt.plot(episodes, evader_rewards, label='회피자 보상', 
-                color=PLOT_PARAMS['colors']['evader'], alpha=0.4)
+                color=PLOT_PARAMS['colors']['evader'], alpha=0.3, linewidth=0.5)
         plt.plot(episodes, pursuer_rewards, label='추격자 보상', 
-                color=PLOT_PARAMS['colors']['pursuer'], alpha=0.4)
+                color=PLOT_PARAMS['colors']['pursuer'], alpha=0.3, linewidth=0.5)
         
         # 이동 평균 추가
         window_size = 100
@@ -86,43 +145,76 @@ def plot_training_progress(success_rates: List[float],
         # Zero-Sum 검증
         reward_sum = [evader_rewards[i] + pursuer_rewards[i] for i in range(len(evader_rewards))]
         plt.plot(episodes, reward_sum, label='보상 합계 (Zero-Sum 검증)', 
-                color='black', linestyle='--')
+                color='black', linestyle='--', alpha=0.7)
         
-        plt.axhline(y=0, color='k', linestyle=':')
+        plt.axhline(y=0, color='k', linestyle=':', alpha=0.5)
         plt.xlabel('에피소드')
         plt.ylabel('보상')
         plt.title('Zero-Sum 게임 보상 추이')
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(f'{save_dir}/zero_sum_rewards_ep{episode_count}.png')
+        plt.legend(loc='best')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(f'{save_dir}/zero_sum_rewards_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
+        
+        # 보상 데이터 저장
+        rewards_data = {
+            'episode': list(range(len(evader_rewards))),
+            'evader_reward': evader_rewards,
+            'pursuer_reward': pursuer_rewards,
+            'reward_sum': reward_sum
+        }
+        save_data_to_csv(rewards_data, f'{save_dir}/rewards_data.csv')
     
     # 4. Nash Equilibrium 메트릭 그래프
     if nash_metrics:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
         eval_episodes = range(0, episode_count, 10)  # 10 에피소드마다 평가 가정
-        plt.plot(eval_episodes[:len(nash_metrics)], nash_metrics)
+        plt.plot(eval_episodes[:len(nash_metrics)], nash_metrics, 'b-', linewidth=2)
         plt.xlabel('에피소드')
         plt.ylabel('Nash Equilibrium 메트릭')
         plt.title('Nash Equilibrium 수렴도')
-        plt.grid(True)
+        plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
-        plt.savefig(f'{save_dir}/nash_metric_ep{episode_count}.png')
+        plt.tight_layout()
+        plt.savefig(f'{save_dir}/nash_metric_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
+        
+        # Nash 메트릭 데이터 저장
+        nash_data = {
+            'episode': list(eval_episodes[:len(nash_metrics)]),
+            'nash_metric': nash_metrics
+        }
+        save_data_to_csv(nash_data, f'{save_dir}/nash_metrics.csv')
     
     # 5. 버퍼 시간 통계 그래프
     if buffer_times:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-        plt.hist(buffer_times, bins=20, alpha=0.7)
+        plt.hist(buffer_times, bins=20, alpha=0.7, color='blue', edgecolor='black')
         plt.axvline(x=np.mean(buffer_times), color='r', linestyle='--',
                    label=f'평균: {np.mean(buffer_times):.2f}초')
         plt.xlabel('버퍼 시간 (초)')
         plt.ylabel('빈도')
         plt.title('종료 조건 버퍼 시간 분포')
         plt.legend()
-        plt.grid(True)
-        plt.savefig(f'{save_dir}/buffer_time_stats_ep{episode_count}.png')
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(f'{save_dir}/buffer_time_stats_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
+    
+    # 모든 학습 데이터를 하나의 JSON 파일로 저장
+    all_training_data = {
+        'episode_count': episode_count,
+        'success_rates': success_rates,
+        'outcome_counts': outcome_counts,
+        'evader_rewards': evader_rewards[-1000:] if len(evader_rewards) > 1000 else evader_rewards,  # 최근 1000개만
+        'pursuer_rewards': pursuer_rewards[-1000:] if len(pursuer_rewards) > 1000 else pursuer_rewards,
+        'nash_metrics': nash_metrics,
+        'buffer_times': buffer_times
+    }
+    
+    with open(f'{save_dir}/training_progress.json', 'w') as f:
+        json.dump(all_training_data, f, indent=2)
 
 
 def visualize_trajectory(states: np.ndarray, 
@@ -143,21 +235,21 @@ def visualize_trajectory(states: np.ndarray,
     ax.plot(states[:, 0], states[:, 1], states[:, 2], 
            color=PLOT_PARAMS['colors']['trajectory'], linewidth=2, label='Trajectory')
     ax.scatter(states[0, 0], states[0, 1], states[0, 2], 
-              color=PLOT_PARAMS['colors']['evader'], s=100, label='Start')
+              color=PLOT_PARAMS['colors']['evader'], s=100, marker='o', label='Start')
     ax.scatter(states[-1, 0], states[-1, 1], states[-1, 2], 
-              color=PLOT_PARAMS['colors']['pursuer'], s=100, label='End')
+              color=PLOT_PARAMS['colors']['pursuer'], s=100, marker='x', label='End')
     
     # Evader의 위치 (원점)
-    ax.scatter(0, 0, 0, color='k', s=150, label='Evader (Chief)')
+    ax.scatter(0, 0, 0, color='k', s=150, marker='*', label='Evader (Chief)')
     
     # 제목에 정보 추가
     enhanced_title = title
     if nash_info is not None:
-        enhanced_title += f" - Nash: {nash_info:.2f}"
+        enhanced_title += f"\nNash: {nash_info:.2f}"
     if safety_info is not None:
-        enhanced_title += f" - Safety: {safety_info:.2f}"
+        enhanced_title += f", Safety: {safety_info:.2f}"
     if buffer_time is not None:
-        enhanced_title += f" - Buffer: {buffer_time:.1f}s"
+        enhanced_title += f", Buffer: {buffer_time:.1f}s"
     
     # 축 레이블
     ax.set_xlabel('x (m) - Radial Direction')
@@ -176,7 +268,10 @@ def visualize_trajectory(states: np.ndarray,
     ax.set_zlim(-max_range, max_range)
     
     # 범례
-    ax.legend()
+    ax.legend(loc='best')
+    
+    # 그리드
+    ax.grid(True, alpha=0.3)
     
     # 행동 벡터 표시 (선택적)
     if actions_e is not None and actions_p is not None:
@@ -184,24 +279,40 @@ def visualize_trajectory(states: np.ndarray,
         step = max(1, len(states) // 20)
         
         for i in range(0, len(states), step):
-            if np.any(actions_e[i] != 0):
+            if i < len(actions_e) and np.any(actions_e[i] != 0):
+                # 회피자 액션 (원점에서)
                 ax.quiver(
-                    0, 0, 0,  # Evader는 원점
+                    0, 0, 0,
                     actions_e[i, 0], actions_e[i, 1], actions_e[i, 2],
                     color=PLOT_PARAMS['colors']['evader'], 
-                    length=max_range/10, normalize=True, alpha=0.6
+                    length=max_range/10, normalize=True, alpha=0.5
                 )
             
-            if np.any(actions_p[i] != 0):
+            if i < len(actions_p) and np.any(actions_p[i] != 0):
+                # 추격자 액션
                 ax.quiver(
                     states[i, 0], states[i, 1], states[i, 2],
                     actions_p[i, 0], actions_p[i, 1], actions_p[i, 2],
                     color=PLOT_PARAMS['colors']['pursuer'], 
-                    length=max_range/10, normalize=True, alpha=0.6
+                    length=max_range/10, normalize=True, alpha=0.5
                 )
     
+    plt.tight_layout()
+    
     if save_path:
-        plt.savefig(f"{save_path}_3d_trajectory.png")
+        plt.savefig(f"{save_path}_3d_trajectory.png", dpi=PLOT_PARAMS['dpi'])
+        
+        # 궤적 데이터 저장
+        trajectory_data = {
+            'x': states[:, 0].tolist(),
+            'y': states[:, 1].tolist(),
+            'z': states[:, 2].tolist(),
+            'vx': states[:, 3].tolist() if states.shape[1] > 3 else [],
+            'vy': states[:, 4].tolist() if states.shape[1] > 4 else [],
+            'vz': states[:, 5].tolist() if states.shape[1] > 5 else [],
+        }
+        with open(f"{save_path}_trajectory_data.json", 'w') as f:
+            json.dump(trajectory_data, f, indent=2)
     
     plt.close()
     
@@ -213,9 +324,10 @@ def visualize_trajectory(states: np.ndarray,
 def plot_distance_evolution(states: np.ndarray, save_path: Optional[str] = None):
     """거리 변화 그래프"""
     distances = np.sqrt(np.sum(states[:, :3]**2, axis=1))
+    time_steps = np.arange(len(distances))
     
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-    plt.plot(distances, color=PLOT_PARAMS['colors']['trajectory'])
+    plt.plot(time_steps, distances, color=PLOT_PARAMS['colors']['trajectory'], linewidth=2)
     plt.axhline(y=1000, color=PLOT_PARAMS['colors']['pursuer'], 
                linestyle='--', label='Capture Distance (1000m)')
     plt.axhline(y=50000, color=PLOT_PARAMS['colors']['evader'], 
@@ -223,11 +335,19 @@ def plot_distance_evolution(states: np.ndarray, save_path: Optional[str] = None)
     plt.xlabel('Time Steps')
     plt.ylabel('Distance (m)')
     plt.title('Distance Between Pursuer and Evader')
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
     plt.legend()
+    plt.tight_layout()
     
     if save_path:
-        plt.savefig(f"{save_path}_distance.png")
+        plt.savefig(f"{save_path}_distance.png", dpi=PLOT_PARAMS['dpi'])
+        
+        # 거리 데이터 저장
+        distance_data = {
+            'time_step': time_steps.tolist(),
+            'distance': distances.tolist()
+        }
+        save_data_to_csv(distance_data, f"{save_path}_distance_data.csv")
     
     plt.close()
 
@@ -239,6 +359,9 @@ def plot_test_results(results: List[Dict],
     """테스트 결과 시각화"""
     setup_matplotlib()
     
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+    
     success = [r['success'] for r in results]
     distances = [r['final_distance_m'] for r in results]
     evader_dvs = [r['evader_total_delta_v_ms'] for r in results]
@@ -249,22 +372,33 @@ def plot_test_results(results: List[Dict],
     # 최종 거리
     colors = [PLOT_PARAMS['colors']['success'] if s else PLOT_PARAMS['colors']['failure'] 
              for s in success]
-    axes[0].bar(range(len(distances)), distances, color=colors)
+    axes[0].bar(range(len(distances)), distances, color=colors, alpha=0.7)
     axes[0].axhline(y=1000, color='r', linestyle='--', label='Capture Distance (1000m)')
     axes[0].set_xlabel('Test Run')
     axes[0].set_ylabel('Final Distance (m)')
     axes[0].set_title('Final Distance by Test Run')
     axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
     
     # Delta-V 사용량
-    axes[1].bar(range(len(evader_dvs)), evader_dvs, color=colors)
+    axes[1].bar(range(len(evader_dvs)), evader_dvs, color=colors, alpha=0.7)
     axes[1].set_xlabel('Test Run')
     axes[1].set_ylabel('Evader Total Delta-V (m/s)')
     axes[1].set_title('Evader Propellant Usage by Test Run')
+    axes[1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     if save_dir:
-        plt.savefig(f"{save_dir}/results_summary.png")
+        plt.savefig(f"{save_dir}/results_summary.png", dpi=PLOT_PARAMS['dpi'])
+        
+        # 결과 데이터 저장
+        test_results_data = {
+            'test_run': list(range(len(results))),
+            'success': success,
+            'final_distance': distances,
+            'evader_delta_v': evader_dvs
+        }
+        save_data_to_csv(test_results_data, f"{save_dir}/test_results.csv")
     plt.close()
     
     # 2. 종료 조건 분포 파이 차트
@@ -288,11 +422,18 @@ def plot_outcome_distribution(outcome_types: Dict, save_dir: Optional[str] = Non
     if filtered_counts:
         plt.figure(figsize=(10, 10))
         colors = plt.cm.Set3(np.linspace(0, 1, len(filtered_counts)))
-        plt.pie(filtered_counts, labels=filtered_labels, autopct='%1.1f%%', colors=colors)
+        wedges, texts, autotexts = plt.pie(filtered_counts, labels=filtered_labels, 
+                                           autopct='%1.1f%%', colors=colors,
+                                           startangle=90)
         plt.title('Test Outcome Distribution')
         
         if save_dir:
-            plt.savefig(f"{save_dir}/outcome_distribution_pie.png")
+            plt.savefig(f"{save_dir}/outcome_distribution_pie.png", dpi=PLOT_PARAMS['dpi'])
+            
+            # 분포 데이터 저장
+            outcome_data = {label: count for label, count in zip(filtered_labels, filtered_counts)}
+            with open(f"{save_dir}/outcome_distribution.json", 'w') as f:
+                json.dump(outcome_data, f, indent=2)
         plt.close()
 
 
@@ -304,32 +445,34 @@ def plot_zero_sum_analysis(zero_sum_metrics: Dict, success: List[bool],
     # 1. 보상 비교 그래프
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
     plt.plot(episodes, zero_sum_metrics['evader_rewards'], 
-            color=PLOT_PARAMS['colors']['evader'], label='Evader Rewards')
+            color=PLOT_PARAMS['colors']['evader'], label='Evader Rewards', linewidth=2)
     plt.plot(episodes, zero_sum_metrics['pursuer_rewards'], 
-            color=PLOT_PARAMS['colors']['pursuer'], label='Pursuer Rewards')
-    plt.axhline(y=0, color='k', linestyle='--')
+            color=PLOT_PARAMS['colors']['pursuer'], label='Pursuer Rewards', linewidth=2)
+    plt.axhline(y=0, color='k', linestyle='--', alpha=0.5)
     plt.xlabel('Test Run')
     plt.ylabel('Average Reward')
     plt.title('Zero-Sum Game Rewards by Test Run')
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
     plt.legend()
+    plt.tight_layout()
     
     if save_dir:
-        plt.savefig(f"{save_dir}/zero_sum_rewards.png")
+        plt.savefig(f"{save_dir}/zero_sum_rewards.png", dpi=PLOT_PARAMS['dpi'])
     plt.close()
     
     # 2. Nash Equilibrium 메트릭
     if 'nash_metrics' in zero_sum_metrics and zero_sum_metrics['nash_metrics']:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-        plt.plot(episodes, zero_sum_metrics['nash_metrics'], 'b-')
+        plt.plot(episodes, zero_sum_metrics['nash_metrics'], 'b-', linewidth=2)
         plt.xlabel('Test Run')
         plt.ylabel('Nash Equilibrium Metric')
         plt.title('Nash Equilibrium Metric by Test Run')
-        plt.grid(True)
+        plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
+        plt.tight_layout()
         
         if save_dir:
-            plt.savefig(f"{save_dir}/nash_metrics.png")
+            plt.savefig(f"{save_dir}/nash_metrics.png", dpi=PLOT_PARAMS['dpi'])
         plt.close()
     
     # 3. Zero-Sum 검증 그래프
@@ -337,16 +480,28 @@ def plot_zero_sum_analysis(zero_sum_metrics: Dict, success: List[bool],
                   for i in range(len(zero_sum_metrics['evader_rewards']))]
     
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-    plt.plot(episodes, rewards_sum, 'k-')
+    plt.plot(episodes, rewards_sum, 'k-', linewidth=2)
     plt.axhline(y=0, color='r', linestyle='--', label='Perfect Zero-Sum')
     plt.xlabel('Test Run')
     plt.ylabel('Rewards Sum (Evader + Pursuer)')
     plt.title('Zero-Sum Game Verification')
-    plt.grid(True)
+    plt.grid(True, alpha=0.3)
     plt.legend()
+    plt.tight_layout()
     
     if save_dir:
-        plt.savefig(f"{save_dir}/zero_sum_verification.png")
+        plt.savefig(f"{save_dir}/zero_sum_verification.png", dpi=PLOT_PARAMS['dpi'])
+        
+        # Zero-Sum 메트릭 데이터 저장
+        zero_sum_data = {
+            'test_run': list(episodes),
+            'evader_reward': zero_sum_metrics['evader_rewards'],
+            'pursuer_reward': zero_sum_metrics['pursuer_rewards'],
+            'reward_sum': rewards_sum
+        }
+        if 'nash_metrics' in zero_sum_metrics:
+            zero_sum_data['nash_metric'] = zero_sum_metrics['nash_metrics']
+        save_data_to_csv(zero_sum_data, f"{save_dir}/zero_sum_metrics.csv")
     plt.close()
     
     # 4. 안전도 점수 그래프
@@ -357,7 +512,7 @@ def plot_zero_sum_analysis(zero_sum_metrics: Dict, success: List[bool],
                  else ('b' if s > SAFETY_THRESHOLDS['conditional_evasion'] else 'r') 
                  for s in safety_scores]
         
-        plt.bar(range(1, len(safety_scores) + 1), safety_scores, color=colors)
+        plt.bar(range(1, len(safety_scores) + 1), safety_scores, color=colors, alpha=0.7)
         plt.axhline(y=SAFETY_THRESHOLDS['permanent_evasion'], color='g', 
                    linestyle='--', label='Permanent Evasion Threshold')
         plt.axhline(y=SAFETY_THRESHOLDS['conditional_evasion'], color='b', 
@@ -365,12 +520,13 @@ def plot_zero_sum_analysis(zero_sum_metrics: Dict, success: List[bool],
         plt.xlabel('Test Run')
         plt.ylabel('Safety Score')
         plt.title('Safety Score by Test Run')
-        plt.grid(True)
+        plt.grid(True, alpha=0.3)
         plt.legend()
         plt.ylim(0, 1)
+        plt.tight_layout()
         
         if save_dir:
-            plt.savefig(f"{save_dir}/safety_scores.png")
+            plt.savefig(f"{save_dir}/safety_scores.png", dpi=PLOT_PARAMS['dpi'])
         plt.close()
 
 
@@ -406,19 +562,20 @@ def plot_orbital_elements_comparison(evader_elements: Dict, pursuer_elements: Di
     
     plt.figure(figsize=(12, 6))
     plt.bar(x - width/2, normalized_evader, width, 
-           label='Evader', color=PLOT_PARAMS['colors']['evader'])
+           label='Evader', color=PLOT_PARAMS['colors']['evader'], alpha=0.7)
     plt.bar(x + width/2, normalized_pursuer, width, 
-           label='Pursuer', color=PLOT_PARAMS['colors']['pursuer'])
+           label='Pursuer', color=PLOT_PARAMS['colors']['pursuer'], alpha=0.7)
     
     plt.xlabel('Orbital Elements')
     plt.ylabel('Values')
     plt.title('Orbital Elements Comparison')
     plt.xticks(x, labels)
     plt.legend()
-    plt.grid(True, alpha=0.3)
+    plt.grid(True, alpha=0.3, axis='y')
+    plt.tight_layout()
     
     if save_path:
-        plt.savefig(f"{save_path}_orbital_elements.png")
+        plt.savefig(f"{save_path}_orbital_elements.png", dpi=PLOT_PARAMS['dpi'])
     plt.close()
 
 
@@ -427,65 +584,91 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
     """종합 대시보드 생성"""
     setup_matplotlib()
     
+    os.makedirs(save_dir, exist_ok=True)
+    
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     fig.suptitle('Training and Testing Summary Dashboard', fontsize=16)
     
     # 1. 성공률 추이
-    if 'success_rates' in training_stats:
-        axes[0, 0].plot(training_stats['success_rates'])
+    if 'success_rates' in training_stats and training_stats['success_rates']:
+        axes[0, 0].plot(training_stats['success_rates'], 'b-', linewidth=2)
         axes[0, 0].set_title('Training Success Rate')
         axes[0, 0].set_xlabel('Episodes')
         axes[0, 0].set_ylabel('Success Rate')
-        axes[0, 0].grid(True)
+        axes[0, 0].grid(True, alpha=0.3)
+        axes[0, 0].set_ylim(0, 1)
     
     # 2. 테스트 결과 분포
-    success_count = sum(1 for r in test_results if r['success'])
-    failure_count = len(test_results) - success_count
-    axes[0, 1].pie([success_count, failure_count], labels=['Success', 'Failure'], 
-                   autopct='%1.1f%%', colors=['green', 'red'])
-    axes[0, 1].set_title('Test Results Distribution')
+    if test_results:
+        success_count = sum(1 for r in test_results if r['success'])
+        failure_count = len(test_results) - success_count
+        axes[0, 1].pie([success_count, failure_count], labels=['Success', 'Failure'], 
+                       autopct='%1.1f%%', colors=['green', 'red'], startangle=90)
+        axes[0, 1].set_title('Test Results Distribution')
     
     # 3. 평균 보상 추이
-    if 'nash_metrics' in training_stats:
-        axes[0, 2].plot(training_stats['nash_metrics'])
+    if 'nash_metrics' in training_stats and training_stats['nash_metrics']:
+        axes[0, 2].plot(training_stats['nash_metrics'], 'g-', linewidth=2)
         axes[0, 2].set_title('Nash Equilibrium Convergence')
         axes[0, 2].set_xlabel('Evaluations')
         axes[0, 2].set_ylabel('Nash Metric')
-        axes[0, 2].grid(True)
+        axes[0, 2].grid(True, alpha=0.3)
+        axes[0, 2].set_ylim(0, 1)
     
     # 4. Delta-V 사용량 분포
-    delta_vs = [r['evader_total_delta_v_ms'] for r in test_results]
-    axes[1, 0].hist(delta_vs, bins=10, alpha=0.7)
-    axes[1, 0].set_title('Delta-V Usage Distribution')
-    axes[1, 0].set_xlabel('Delta-V (m/s)')
-    axes[1, 0].set_ylabel('Frequency')
-    axes[1, 0].grid(True)
+    if test_results:
+        delta_vs = [r['evader_total_delta_v_ms'] for r in test_results]
+        axes[1, 0].hist(delta_vs, bins=10, alpha=0.7, color='blue', edgecolor='black')
+        axes[1, 0].set_title('Delta-V Usage Distribution')
+        axes[1, 0].set_xlabel('Delta-V (m/s)')
+        axes[1, 0].set_ylabel('Frequency')
+        axes[1, 0].grid(True, alpha=0.3)
     
     # 5. 최종 거리 분포
-    distances = [r['final_distance_m'] for r in test_results]
-    axes[1, 1].hist(distances, bins=10, alpha=0.7)
-    axes[1, 1].axvline(x=1000, color='r', linestyle='--', label='Capture Threshold')
-    axes[1, 1].set_title('Final Distance Distribution')
-    axes[1, 1].set_xlabel('Distance (m)')
-    axes[1, 1].set_ylabel('Frequency')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True)
+    if test_results:
+        distances = [r['final_distance_m'] for r in test_results]
+        axes[1, 1].hist(distances, bins=10, alpha=0.7, color='green', edgecolor='black')
+        axes[1, 1].axvline(x=1000, color='r', linestyle='--', label='Capture Threshold')
+        axes[1, 1].set_title('Final Distance Distribution')
+        axes[1, 1].set_xlabel('Distance (m)')
+        axes[1, 1].set_ylabel('Frequency')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
     
     # 6. 성능 요약 텍스트
     axes[1, 2].axis('off')
     summary_text = f"""
     Training Episodes: {training_stats.get('episodes_completed', 'N/A')}
-    Test Success Rate: {success_count/len(test_results):.1%}
-    Avg Delta-V: {np.mean(delta_vs):.1f} m/s
-    Avg Distance: {np.mean(distances):.0f} m
-    Nash Metric: {training_stats.get('nash_metrics', [0])[-1]:.3f}
+    Test Success Rate: {success_count/len(test_results):.1%} if test_results else 'N/A'
+    Avg Delta-V: {np.mean(delta_vs):.1f} m/s if test_results else 'N/A'
+    Avg Distance: {np.mean(distances):.0f} m if test_results else 'N/A'
+    Nash Metric: {training_stats.get('nash_metrics', [0])[-1] if 'nash_metrics' in training_stats and training_stats['nash_metrics'] else 0:.3f}
     """
     axes[1, 2].text(0.1, 0.5, summary_text, fontsize=12, verticalalignment='center')
     axes[1, 2].set_title('Performance Summary')
     
     plt.tight_layout()
-    plt.savefig(f"{save_dir}/summary_dashboard.png")
+    plt.savefig(f"{save_dir}/summary_dashboard.png", dpi=PLOT_PARAMS['dpi'], bbox_inches='tight')
     plt.close()
+    
+    # 대시보드 데이터 저장
+    dashboard_data = {
+        'training_stats': {
+            'episodes_completed': training_stats.get('episodes_completed', 0),
+            'final_success_rate': training_stats.get('success_rates', [0])[-1] if 'success_rates' in training_stats and training_stats['success_rates'] else 0,
+            'final_nash_metric': training_stats.get('nash_metrics', [0])[-1] if 'nash_metrics' in training_stats and training_stats['nash_metrics'] else 0,
+        },
+        'test_stats': {
+            'total_tests': len(test_results) if test_results else 0,
+            'success_count': success_count if test_results else 0,
+            'success_rate': success_count/len(test_results) if test_results else 0,
+            'avg_delta_v': np.mean(delta_vs) if test_results else 0,
+            'avg_distance': np.mean(distances) if test_results else 0,
+        }
+    }
+    
+    with open(f"{save_dir}/dashboard_summary.json", 'w') as f:
+        json.dump(dashboard_data, f, indent=2)
 
 
 # 모듈 초기화 시 matplotlib 설정
