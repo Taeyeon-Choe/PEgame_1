@@ -120,15 +120,28 @@ class PursuitEvasionEnv(gym.Env):
         self.evasion_buffer_steps = self.config.evasion_buffer_steps
         self.safety_buffer_steps = self.config.safety_buffer_steps
 
-    def _init_chief_orbit(self):
-        """기준 궤도 초기화"""
+    def _init_chief_orbit(self, randomize: bool = False):
+        """기준 궤도 초기화
+
+        Args:
+            randomize: True이면 반장축을 7000~8500km, 이심률을 0~0.5 범위에서
+                무작위로 샘플링한다.
+        """
         from config.settings import default_config
 
         orbit_config = default_config.orbit
 
+        a = orbit_config.a
+        e = orbit_config.e
+
+        if randomize:
+            # 매 에피소드마다 넓은 범위에서 궤도 매개변수를 샘플링
+            a = np.random.uniform(7000e3, 8500e3)  # 7000~8500 km
+            e = np.random.uniform(0.0, 0.5)
+
         self.evader_orbit = ChiefOrbit(
-            a=orbit_config.a,
-            e=orbit_config.e,
+            a=a,
+            e=e,
             i=orbit_config.i,
             RAAN=orbit_config.RAAN,
             omega=orbit_config.omega,
@@ -274,20 +287,17 @@ class PursuitEvasionEnv(gym.Env):
 
     def reset(self) -> np.ndarray:
         """환경 초기화"""
-        # 기준 궤도 재설정
-        from config.settings import default_config
+        # 기준 궤도 재설정 (매 에피소드 무작위화)
+        self._init_chief_orbit(randomize=True)
 
-        orbit_config = default_config.orbit
+        # 무작위화된 궤도에 맞춰 버퍼 크기 재계산
+        self.orbital_period = self.evader_orbit.period
+        self.three_orbit_time = 3 * self.orbital_period
+        self.three_orbit_steps = int(self.three_orbit_time / self.dt)
 
-        self.evader_orbit = ChiefOrbit(
-            a=orbit_config.a,
-            e=orbit_config.e,
-            i=orbit_config.i,
-            RAAN=orbit_config.RAAN,
-            omega=orbit_config.omega,
-            M0=orbit_config.M0,
-            mu=MU_EARTH,
-        )
+        self.orbital_buffer_capture = max(int(0.5 * self.orbital_period / self.dt), 10)
+        self.orbital_buffer_evasion = max(int(1.0 * self.orbital_period / self.dt), 20)
+        self.orbital_buffer_safety = max(int(1.5 * self.orbital_period / self.dt), 30)
 
         # 상태 초기화
         self.state = self.initialize_with_accurate_dynamics()
