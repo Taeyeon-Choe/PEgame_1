@@ -37,8 +37,8 @@
 
 ### 1. 저장소 클론
 ```bash
-git clone https://github.com/yourusername/satellite-pursuit-evasion.git
-cd satellite-pursuit-evasion
+git clone https://github.com/Taeyeon-Choe/PEgame_1.git
+cd PEgame_1
 ```
 
 ### 2. 가상환경 생성 (권장)
@@ -47,11 +47,10 @@ cd satellite-pursuit-evasion
 conda create -n satellite-game python=3.10
 conda activate satellite-game
 
-# venv 사용시 (Python 3.11도 가능)
-python3.10 -m venv venv
-# 또는
-python3.11 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+# venv 사용시
+python -m venv venv
+source venv/bin/activate
+# Windows: venv\Scripts\activate
 ```
 
 ### 3. 의존성 설치
@@ -63,12 +62,12 @@ pip install -r requirements.txt
 
 #### 개발 환경 설치
 ```bash
-pip install -e .[dev]
+#pip install -e .[dev]
 ```
 
-#### GPU 지원 설치 (CUDA 11.8)
+#### GPU 지원 설치 (CUDA)
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
