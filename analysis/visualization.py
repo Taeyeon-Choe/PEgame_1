@@ -78,10 +78,10 @@ def plot_training_progress(success_rates: List[float],
     if success_rates:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
         plt.plot(range(len(success_rates)), success_rates, 
-                label='성공률 (이동 평균)', color=PLOT_PARAMS['colors']['evader'])
-        plt.xlabel('에피소드')
-        plt.ylabel('성공률')
-        plt.title(f'학습 과정 성공률 (에피소드 {episode_count})')
+                label='Success Rate (Moving Average)', color=PLOT_PARAMS['colors']['evader'])
+        plt.xlabel('Episode')
+        plt.ylabel('Success Rate')
+        plt.title(f'Training Success Rate (Episode {episode_count})')
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
         plt.legend()
@@ -110,7 +110,7 @@ def plot_training_progress(success_rates: List[float],
             wedges, texts, autotexts = plt.pie(filtered_counts, labels=filtered_labels, 
                                                autopct='%1.1f%%', colors=colors,
                                                startangle=90)
-            plt.title(f'결과 분포 (에피소드 {episode_count})')
+            plt.title(f'Outcome Distribution (Episode {episode_count})')
             plt.tight_layout()
             plt.savefig(f'{save_dir}/outcome_distribution_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
             plt.close()
@@ -126,9 +126,9 @@ def plot_training_progress(success_rates: List[float],
         episodes = range(len(evader_rewards))
         
         # 원시 데이터 (투명하게)
-        plt.plot(episodes, evader_rewards, label='회피자 보상', 
+        plt.plot(episodes, evader_rewards, label='Evader Reward', 
                 color=PLOT_PARAMS['colors']['evader'], alpha=0.3, linewidth=0.5)
-        plt.plot(episodes, pursuer_rewards, label='추격자 보상', 
+        plt.plot(episodes, pursuer_rewards, label='Pursuer Reward', 
                 color=PLOT_PARAMS['colors']['pursuer'], alpha=0.3, linewidth=0.5)
         
         # 이동 평균 추가
@@ -137,20 +137,20 @@ def plot_training_progress(success_rates: List[float],
             evader_ma = np.convolve(evader_rewards, np.ones(window_size)/window_size, mode='valid')
             pursuer_ma = np.convolve(pursuer_rewards, np.ones(window_size)/window_size, mode='valid')
             ma_episodes = range(window_size-1, len(evader_rewards))
-            plt.plot(ma_episodes, evader_ma, label='회피자 보상 (MA)', 
+            plt.plot(ma_episodes, evader_ma, label='Evader Reward (MA)', 
                     color='darkgreen', linewidth=2)
-            plt.plot(ma_episodes, pursuer_ma, label='추격자 보상 (MA)', 
+            plt.plot(ma_episodes, pursuer_ma, label='Pursuer Reward (MA)', 
                     color='darkred', linewidth=2)
         
         # Zero-Sum 검증
         reward_sum = [evader_rewards[i] + pursuer_rewards[i] for i in range(len(evader_rewards))]
-        plt.plot(episodes, reward_sum, label='보상 합계 (Zero-Sum 검증)', 
+        plt.plot(episodes, reward_sum, label='Reward Sum (Zero-Sum Verification)', 
                 color='black', linestyle='--', alpha=0.7)
         
         plt.axhline(y=0, color='k', linestyle=':', alpha=0.5)
-        plt.xlabel('에피소드')
-        plt.ylabel('보상')
-        plt.title('Zero-Sum 게임 보상 추이')
+        plt.xlabel('Episode')
+        plt.ylabel('Reward')
+        plt.title('Zero-Sum Game Reward Trend')
         plt.legend(loc='best')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -171,9 +171,9 @@ def plot_training_progress(success_rates: List[float],
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
         eval_episodes = range(0, episode_count, 10)  # 10 에피소드마다 평가 가정
         plt.plot(eval_episodes[:len(nash_metrics)], nash_metrics, 'b-', linewidth=2)
-        plt.xlabel('에피소드')
-        plt.ylabel('Nash Equilibrium 메트릭')
-        plt.title('Nash Equilibrium 수렴도')
+        plt.xlabel('Episode')
+        plt.ylabel('Nash Equilibrium Metric')
+        plt.title('Nash Equilibrium Convergence')
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
         plt.tight_layout()
@@ -192,10 +192,10 @@ def plot_training_progress(success_rates: List[float],
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
         plt.hist(buffer_times, bins=20, alpha=0.7, color='blue', edgecolor='black')
         plt.axvline(x=np.mean(buffer_times), color='r', linestyle='--',
-                   label=f'평균: {np.mean(buffer_times):.2f}초')
-        plt.xlabel('버퍼 시간 (초)')
-        plt.ylabel('빈도')
-        plt.title('종료 조건 버퍼 시간 분포')
+                   label=f'Average: {np.mean(buffer_times):.2f}s')
+        plt.xlabel('Buffer Time (seconds)')
+        plt.ylabel('Frequency')
+        plt.title('Termination Condition Buffer Time Distribution')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
