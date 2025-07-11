@@ -1,5 +1,5 @@
 """
-추격-회피 게임 환경 구현 (3궤도 주기 종료 조건 추가)
+추격-회피 게임 환경 구현 (1궤도: 게임, 2궤도: 관찰, 3궤도: 게임)
 """
 
 import numpy as np
@@ -154,7 +154,13 @@ class PursuitEvasionEnv(gym.Env):
         self.three_orbit_time = 3 * self.orbital_period
         self.three_orbit_steps = int(self.three_orbit_time / self.dt)
         
-        # 3궤도 주기 기반으로 버퍼 크기 재설정
+        # 각 궤도 주기의 스텝 수
+        self.steps_per_orbit = int(self.orbital_period / self.dt)
+        
+        # 궤도별 모드 설정 (1궤도: 게임, 2궤도: 관찰, 3궤도: 게임)
+        self.orbit_modes = ['game', 'observe', 'game']
+        
+        # 궤도별 버퍼 크기 재설정
         self.orbital_buffer_capture = max(int(0.5 * self.orbital_period / self.dt), 10)  # 0.5 궤도
         self.orbital_buffer_evasion = max(int(1.0 * self.orbital_period / self.dt), 20)  # 1 궤도
         self.orbital_buffer_safety = max(int(1.5 * self.orbital_period / self.dt), 30)   # 1.5 궤도
@@ -162,6 +168,7 @@ class PursuitEvasionEnv(gym.Env):
         if self.debug_mode:
             print(f"궤도 주기: {self.orbital_period:.1f}초 ({self.orbital_period/60:.1f}분)")
             print(f"3궤도 주기: {self.three_orbit_time:.1f}초 ({self.three_orbit_time/60:.1f}분)")
+            print(f"각 궤도당 스텝: {self.steps_per_orbit}")
             print(f"버퍼 크기 - 포획: {self.orbital_buffer_capture} 스텝, "
                   f"회피: {self.orbital_buffer_evasion} 스텝, "
                   f"안전: {self.orbital_buffer_safety} 스텝")
@@ -171,11 +178,11 @@ class PursuitEvasionEnv(gym.Env):
         # 정규화된 액션 사용
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
-        # 정규화된 관측 공간
+        # 정규화된 관측 공간 (현재 궤도 모드 추가)
         self.observation_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(9,),  # 정규화된 위치(3), 속도(3), 추격자 최근 행동(3)
+            shape=(10,),  # 정규화된 위치(3), 속도(3), 추격자 최근 행동(3), 궤도 모드(1)
             dtype=np.float32,
         )
 
@@ -211,6 +218,7 @@ class PursuitEvasionEnv(gym.Env):
         # 3궤도 주기 추적
         self.orbit_time_tracker = 0
         self.complete_orbits = 0
+        self.current_orbit_mode = 'game'  # 현재 궤도 모드
 
     def _init_pursuer_strategy(self):
         """지능형 추격자 전략 초기화"""
@@ -226,8 +234,11 @@ class PursuitEvasionEnv(gym.Env):
         norm_pos = np.clip(state[:3] / self.pos_scale, -1.0, 1.0)
         norm_vel = np.clip(state[3:6] / self.vel_scale, -1.0, 1.0)
         norm_action = np.clip(pursuer_action / self.delta_v_pmax, -1.0, 1.0)
+        
+        # 현재 궤도 모드를 숫자로 변환 (game: 1, observe: 0)
+        mode_value = 1.0 if self.current_orbit_mode == 'game' else 0.0
 
-        return np.concatenate((norm_pos, norm_vel, norm_action))
+        return np.concatenate((norm_pos, norm_vel, norm_action, [mode_value]))
 
     def _denormalize_action(self, normalized_action: np.ndarray) -> np.ndarray:
         """정규화된 액션을 실제 delta-v로 변환"""
@@ -294,6 +305,7 @@ class PursuitEvasionEnv(gym.Env):
         self.orbital_period = self.evader_orbit.period
         self.three_orbit_time = 3 * self.orbital_period
         self.three_orbit_steps = int(self.three_orbit_time / self.dt)
+        self.steps_per_orbit = int(self.orbital_period / self.dt)
 
         self.orbital_buffer_capture = max(int(0.5 * self.orbital_period / self.dt), 10)
         self.orbital_buffer_evasion = max(int(1.0 * self.orbital_period / self.dt), 20)
@@ -324,6 +336,7 @@ class PursuitEvasionEnv(gym.Env):
         # 3궤도 주기 추적 초기화
         self.orbit_time_tracker = 0
         self.complete_orbits = 0
+        self.current_orbit_mode = 'game'  # 첫 궤도는 게임 모드
 
         # 히스토리 초기화
         self.safety_score_history = deque(maxlen=self.orbital_buffer_safety)
@@ -450,10 +463,19 @@ class PursuitEvasionEnv(gym.Env):
 
         return all_directions
 
+    def get_current_orbit_mode(self) -> str:
+        """현재 궤도 주기에 따른 모드 반환"""
+        # 현재 어느 궤도인지 계산 (0, 1, 2)
+        current_orbit_index = self.complete_orbits % 3
+        return self.orbit_modes[current_orbit_index]
+
     def step(
         self, normalized_action_e: np.ndarray
     ) -> Tuple[np.ndarray, float, bool, Dict]:
         """환경 스텝 실행"""
+        # 현재 궤도 모드 확인
+        self.current_orbit_mode = self.get_current_orbit_mode()
+        
         # 정규화된 액션을 실제 delta-v로 변환
         action_e = self._denormalize_action(normalized_action_e)
 
@@ -463,29 +485,38 @@ class PursuitEvasionEnv(gym.Env):
                 print(f"WARNING: action_e에 NaN 값 감지됨: {action_e}")
             action_e = np.zeros_like(action_e)
 
-        # 회피자 행동 제한
-        delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
-
-        # 추진제 예산 업데이트
-        delta_v_e_mag = np.linalg.norm(delta_v_e)
-        self.total_delta_v_e += delta_v_e_mag
-
-        # 추격자 행동 결정
-        if self.step_count % self.k == 0:
-            delta_v_p = self.compute_interception_strategy(self.state)
-            self.pursuer_last_action = delta_v_p
-            self.pursuer_action_history.append(delta_v_p.copy())
+        # 현재 모드에 따라 delta-v 적용 여부 결정
+        if self.current_orbit_mode == 'game':
+            # 게임 모드: delta-v 정상 적용
+            delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
+            delta_v_e_mag = np.linalg.norm(delta_v_e)
+            self.total_delta_v_e += delta_v_e_mag
+            
+            # 추격자 행동 결정
+            if self.step_count % self.k == 0:
+                delta_v_p = self.compute_interception_strategy(self.state)
+                self.pursuer_last_action = delta_v_p
+                self.pursuer_action_history.append(delta_v_p.copy())
+            else:
+                delta_v_p = np.zeros(3)
         else:
+            # 관찰 모드: delta-v 없이 propagate만
+            delta_v_e = np.zeros(3)
+            delta_v_e_mag = 0.0
             delta_v_p = np.zeros(3)
+            
+            if self.debug_mode and self.step_count % 100 == 0:
+                print(f"관찰 모드 (궤도 {self.complete_orbits + 1}): delta-v 적용하지 않음")
 
-        # 궤도 업데이트 (회피자 델타-V 적용)
-        self._apply_evader_delta_v(delta_v_e)
+        # 궤도 업데이트 (회피자 델타-V 적용 - 게임 모드일 때만)
+        if self.current_orbit_mode == 'game' and np.any(delta_v_e != 0):
+            self._apply_evader_delta_v(delta_v_e)
 
-        # 추격자 델타-V 적용 (상대 속도에 직접)
-        if np.any(delta_v_p != 0):
+        # 추격자 델타-V 적용 (상대 속도에 직접 - 게임 모드일 때만)
+        if self.current_orbit_mode == 'game' and np.any(delta_v_p != 0):
             self.state[3:] += delta_v_p
 
-        # 상대 운동 시뮬레이션
+        # 상대 운동 시뮬레이션 (항상 수행)
         self._simulate_relative_motion()
 
         # 시간 및 스텝 업데이트
@@ -498,7 +529,8 @@ class PursuitEvasionEnv(gym.Env):
             self.complete_orbits += 1
             self.orbit_time_tracker -= self.orbital_period
             if self.debug_mode:
-                print(f"궤도 {self.complete_orbits} 완료")
+                new_mode = self.get_current_orbit_mode()
+                print(f"궤도 {self.complete_orbits} 완료, 다음 모드: {new_mode}")
 
         # 종료 조건 확인 - 3궤도 주기 고려
         done, termination_info = self.check_orbital_period_termination()
@@ -526,6 +558,7 @@ class PursuitEvasionEnv(gym.Env):
                 "evader_impulse_count": len(self.evader_impulse_history),
                 "complete_orbits": self.complete_orbits,
                 "orbital_phase": self.orbit_time_tracker / self.orbital_period,
+                "current_orbit_mode": self.current_orbit_mode,
             }
         )
 
@@ -570,6 +603,8 @@ class PursuitEvasionEnv(gym.Env):
                 "delta_v_eci": delta_v_e_eci.copy(),
                 "r_evader": r_evader.copy(),
                 "v_evader": v_evader.copy(),
+                "orbit_number": self.complete_orbits + 1,
+                "orbit_mode": self.current_orbit_mode,
             }
         )
 
@@ -753,25 +788,27 @@ class PursuitEvasionEnv(gym.Env):
         """3궤도 주기를 고려한 종료 조건 확인"""
         rho_mag = np.linalg.norm(self.state[:3])
 
-        # 1. 포획 상태 추적
-        is_captured = rho_mag < self.capture_distance
-        self.capture_status_history.append(is_captured)
+        # 1. 포획 상태 추적 (게임 모드에서만)
+        if self.current_orbit_mode == 'game':
+            is_captured = rho_mag < self.capture_distance
+            self.capture_status_history.append(is_captured)
 
-        # 포획 상태가 충분히 지속되었는지 확인
-        if len(self.capture_status_history) >= self.orbital_buffer_capture:
-            capture_ratio = sum(self.capture_status_history) / len(self.capture_status_history)
-            
-            # 80% 이상의 시간 동안 포획 상태 유지 시 종료
-            if capture_ratio > 0.8:
-                self.termination_details = {
-                    "outcome": "captured",
-                    "evader_reward": -10,
-                    "pursuer_reward": 10,
-                    "buffer_time": self.orbital_buffer_capture * self.dt,
-                    "relative_distance": rho_mag,
-                    "orbit_consistency": f"{capture_ratio:.1%} over {self.complete_orbits} orbits",
-                }
-                return True, self.termination_details
+            # 포획 상태가 충분히 지속되었는지 확인
+            if len(self.capture_status_history) >= self.orbital_buffer_capture:
+                capture_ratio = sum(self.capture_status_history) / len(self.capture_status_history)
+                
+                # 80% 이상의 시간 동안 포획 상태 유지 시 종료
+                if capture_ratio > 0.8:
+                    self.termination_details = {
+                        "outcome": "captured",
+                        "evader_reward": -10,
+                        "pursuer_reward": 10,
+                        "buffer_time": self.orbital_buffer_capture * self.dt,
+                        "relative_distance": rho_mag,
+                        "orbit_consistency": f"{capture_ratio:.1%} over {self.complete_orbits} orbits",
+                        "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
+                    }
+                    return True, self.termination_details
 
         # 2. 추진제 소진
         if self.total_delta_v_e > self.max_delta_v_budget:
@@ -782,6 +819,7 @@ class PursuitEvasionEnv(gym.Env):
                 "relative_distance": rho_mag,
                 "delta_v_used": self.total_delta_v_e,
                 "complete_orbits": self.complete_orbits,
+                "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
             }
             return True, self.termination_details
 
@@ -794,11 +832,12 @@ class PursuitEvasionEnv(gym.Env):
                 "pursuer_reward": -5 * norm_distance,
                 "relative_distance": rho_mag,
                 "complete_orbits": self.complete_orbits,
+                "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
             }
             return True, self.termination_details
 
-        # 4. 회피 분석 (1궤도 이상 유지 필요)
-        if rho_mag > self.evasion_distance:
+        # 4. 회피 분석 (게임 모드에서의 성과를 중심으로)
+        if rho_mag > self.evasion_distance and self.current_orbit_mode == 'game':
             self.evasion_status_history.append(True)
 
             if len(self.evasion_status_history) >= self.orbital_buffer_evasion:
@@ -827,6 +866,7 @@ class PursuitEvasionEnv(gym.Env):
                                 "buffer_time": self.orbital_buffer_safety * self.dt,
                                 "safety_analysis": safety_analysis,
                                 "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
+                                "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
                             }
                             return True, self.termination_details
 
@@ -840,13 +880,14 @@ class PursuitEvasionEnv(gym.Env):
                                 "buffer_time": self.orbital_buffer_safety * self.dt,
                                 "safety_analysis": safety_analysis,
                                 "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
+                                "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
                             }
                             return True, self.termination_details
         else:
             # 회피 거리 미달 시 히스토리 일부만 제거 (부드러운 전환)
-            if len(self.evasion_status_history) > 0:
+            if len(self.evasion_status_history) > 0 and self.current_orbit_mode == 'game':
                 self.evasion_status_history.popleft()
-            if len(self.safety_score_history) > 0:
+            if len(self.safety_score_history) > 0 and self.current_orbit_mode == 'game':
                 self.safety_score_history.popleft()
 
         return False, {}
@@ -870,6 +911,7 @@ class PursuitEvasionEnv(gym.Env):
             "fuel_safety": fuel_safety,
             "remaining_delta_v": remaining_dv,
             "complete_orbits": self.complete_orbits,
+            "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
         }
 
     def _calculate_rewards(
@@ -882,39 +924,48 @@ class PursuitEvasionEnv(gym.Env):
             info = termination_info
             self.final_relative_distance = np.linalg.norm(self.state[:3])
         else:
-            # 단계별 보상
+            # 단계별 보상 (게임 모드에서만 실질적인 보상)
             rho_mag = np.linalg.norm(self.state[:3])
 
-            # 거리 보상
-            normalized_distance = min(rho_mag / self.capture_distance, 100)
-            distance_reward = 0.01 * normalized_distance
+            if self.current_orbit_mode == 'game':
+                # 거리 보상
+                normalized_distance = min(rho_mag / self.capture_distance, 100)
+                distance_reward = 0.01 * normalized_distance
 
-            # 속도 방향 보상
-            v_rel = self.state[3:6]
-            v_rel_mag = np.linalg.norm(v_rel)
-            if v_rel_mag > 0 and rho_mag > 0:
-                angle = np.arccos(
-                    np.clip(
-                        np.dot(v_rel, self.state[:3]) / (v_rel_mag * rho_mag), -1.0, 1.0
+                # 속도 방향 보상
+                v_rel = self.state[3:6]
+                v_rel_mag = np.linalg.norm(v_rel)
+                if v_rel_mag > 0 and rho_mag > 0:
+                    angle = np.arccos(
+                        np.clip(
+                            np.dot(v_rel, self.state[:3]) / (v_rel_mag * rho_mag), -1.0, 1.0
+                        )
                     )
+                    tangential_reward = 0.005 * np.sin(angle)
+                else:
+                    tangential_reward = 0
+
+                control_cost = self.c * delta_v_e_mag
+
+                # 회피 보너스
+                dodge_bonus = 0
+                if self.step_count % self.k == 0 and rho_mag > self.capture_distance * 3:
+                    dodge_bonus = 0.1
+
+                evader_reward = (
+                    distance_reward + tangential_reward - control_cost + dodge_bonus
                 )
-                tangential_reward = 0.005 * np.sin(angle)
+                pursuer_reward = -evader_reward
             else:
-                tangential_reward = 0
+                # 관찰 모드: 최소 보상 (거리 유지에 대한 작은 보너스)
+                evader_reward = 0.001 * min(rho_mag / self.capture_distance, 10)
+                pursuer_reward = -evader_reward
 
-            control_cost = self.c * delta_v_e_mag
-
-            # 회피 보너스
-            dodge_bonus = 0
-            if self.step_count % self.k == 0 and rho_mag > self.capture_distance * 3:
-                dodge_bonus = 0.1
-
-            evader_reward = (
-                distance_reward + tangential_reward - control_cost + dodge_bonus
-            )
-            pursuer_reward = -evader_reward
-
-            info = {"evader_reward": evader_reward, "pursuer_reward": pursuer_reward}
+            info = {
+                "evader_reward": evader_reward, 
+                "pursuer_reward": pursuer_reward,
+                "orbit_mode": self.current_orbit_mode,
+            }
 
         return evader_reward, pursuer_reward, info
 
@@ -949,6 +1000,9 @@ class PursuitEvasionEnv(gym.Env):
 
         success = final_distance > self.capture_distance
 
+        # 게임 궤도 수 계산
+        game_orbits = sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game')
+
         result = {
             "final_distance_m": final_distance,
             "evader_total_delta_v_ms": total_e_delta_v,
@@ -959,6 +1013,8 @@ class PursuitEvasionEnv(gym.Env):
             "success": success,
             "trajectory_length": len(states),
             "complete_orbits": self.complete_orbits,
+            "game_orbits": game_orbits,
+            "observation_orbits": self.complete_orbits - game_orbits,
         }
 
         return result
