@@ -445,18 +445,27 @@ class EarlyStoppingCallback(BaseCallback):
         
 class LearningRateScheduler(BaseCallback):
     """학습률 감소 스케줄러"""
-    def __init__(self, initial_lr=0.0001, decay_rate=0.95, decay_steps=10000):
-        super().__init__()
+    def __init__(self, initial_lr=0.0001, decay_rate=0.95, decay_steps=10000, verbose=0):
+        super().__init__(verbose)  # BaseCallback에 verbose 전달
         self.initial_lr = initial_lr
         self.decay_rate = decay_rate
         self.decay_steps = decay_steps
     
     def _on_step(self):
-        if self.n_calls % self.decay_steps == 0:
+        if self.n_calls % self.decay_steps == 0 and self.n_calls > 0:
             new_lr = self.initial_lr * (self.decay_rate ** (self.n_calls // self.decay_steps))
+            
+            # 학습률 업데이트
             self.model.lr_schedule = lambda _: new_lr
+            
+            # verbose가 설정되어 있으면 출력
             if self.verbose > 0:
-                print(f"학습률 업데이트: {new_lr:.6f}")
+                print(f"[Step {self.n_calls}] 학습률 업데이트: {new_lr:.6f}")
+                
+            # 로거가 있으면 기록
+            if hasattr(self, 'logger') and self.logger is not None:
+                self.logger.record("train/learning_rate", new_lr)
+        
         return True
 
 class DetailedAnalysisCallback(BaseCallback):
