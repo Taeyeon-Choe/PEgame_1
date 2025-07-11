@@ -914,59 +914,60 @@ class PursuitEvasionEnv(gym.Env):
             "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
         }
 
-    def _calculate_rewards(
-        self, done: bool, termination_info: Dict, delta_v_e_mag: float
-    ) -> Tuple[float, float, Dict]:
-        """보상 계산"""
+    def _calculate_rewards(self, done: bool, termination_info: Dict, delta_v_e_mag: float) -> Tuple[float, float, Dict]:
+        """보상 계산 - 연료 효율성 강조"""
         if done:
             evader_reward = termination_info["evader_reward"]
             pursuer_reward = termination_info["pursuer_reward"]
             info = termination_info
             self.final_relative_distance = np.linalg.norm(self.state[:3])
         else:
-            # 단계별 보상 (게임 모드에서만 실질적인 보상)
             rho_mag = np.linalg.norm(self.state[:3])
-
+            
             if self.current_orbit_mode == 'game':
                 # 거리 보상
                 normalized_distance = min(rho_mag / self.capture_distance, 100)
                 distance_reward = 0.01 * normalized_distance
-
+                
                 # 속도 방향 보상
                 v_rel = self.state[3:6]
                 v_rel_mag = np.linalg.norm(v_rel)
                 if v_rel_mag > 0 and rho_mag > 0:
                     angle = np.arccos(
-                        np.clip(
-                            np.dot(v_rel, self.state[:3]) / (v_rel_mag * rho_mag), -1.0, 1.0
-                        )
+                        np.clip(np.dot(v_rel, self.state[:3]) / (v_rel_mag * rho_mag), -1.0, 1.0)
                     )
                     tangential_reward = 0.005 * np.sin(angle)
                 else:
                     tangential_reward = 0
-
+                
+                # 제어 비용 (증가)
                 control_cost = self.c * delta_v_e_mag
-
+                
+                # 연료 보존 보너스 추가
+                fuel_remaining = self.max_delta_v_budget - self.total_delta_v_e
+                fuel_bonus = 0.001 * fuel_remaining if fuel_remaining > 0 else 0
+                
                 # 회피 보너스
                 dodge_bonus = 0
                 if self.step_count % self.k == 0 and rho_mag > self.capture_distance * 3:
                     dodge_bonus = 0.1
-
+                
                 evader_reward = (
-                    distance_reward + tangential_reward - control_cost + dodge_bonus
+                    distance_reward + tangential_reward - control_cost + 
+                    fuel_bonus + dodge_bonus
                 )
                 pursuer_reward = -evader_reward
             else:
-                # 관찰 모드: 최소 보상 (거리 유지에 대한 작은 보너스)
+                # 관찰 모드: 거리 유지에 대한 작은 보너스
                 evader_reward = 0.001 * min(rho_mag / self.capture_distance, 10)
                 pursuer_reward = -evader_reward
-
+            
             info = {
                 "evader_reward": evader_reward, 
                 "pursuer_reward": pursuer_reward,
                 "orbit_mode": self.current_orbit_mode,
             }
-
+        
         return evader_reward, pursuer_reward, info
 
     def _update_nash_metric(self):
