@@ -324,26 +324,30 @@ class SACTrainer:
         return stats
 
     def _save_training_history(self):
-        """학습 히스토리 저장"""
+        """학습 히스토리 저장 - Tensor 직렬화 오류 수정"""
         import json
-
+        import torch
+        
         history = self.get_training_stats()
-
+        
         # JSON 직렬화 가능한 형태로 변환
         serializable_history = {}
         for key, value in history.items():
             if isinstance(value, (list, dict, str, int, float, bool)):
                 serializable_history[key] = value
-            elif hasattr(value, "__dict__"):
+            elif isinstance(value, torch.Tensor):
+                # Tensor를 리스트로 변환
+                serializable_history[key] = value.tolist()
+            elif hasattr(value, '__dict__'):
                 serializable_history[key] = value.__dict__
             else:
                 serializable_history[key] = str(value)
-
+        
         # 파일 저장
         history_path = f"{self.log_dir}/training_history.json"
         with open(history_path, "w") as f:
-            json.dump(serializable_history, f, indent=2)
-
+            json.dump(serializable_history, f, indent=2, default=str)
+        
         print(f"학습 히스토리 저장됨: {history_path}")
 
     def continue_training(
