@@ -474,78 +474,98 @@ import os
 from stable_baselines3.common.callbacks import BaseCallback
 
 class DetailedAnalysisCallback(BaseCallback):
-    """학습 중 상세 분석 플롯을 생성하는 콜백"""
+    """벡터 환경을 지원하는 상세 분석 콜백"""
     
     def __init__(self, plot_freq=1000, save_dir="./analysis_plots", 
                  episode_plot_freq=100, verbose=1):
         super().__init__(verbose)
         self.plot_freq = plot_freq
         self.save_dir = save_dir
-        self.episode_plot_freq = episode_plot_freq  # 몇 번째 에피소드마다 플롯할지
+        self.episode_plot_freq = episode_plot_freq
         os.makedirs(save_dir, exist_ok=True)
         
-        # 전체 학습 데이터 저장용
-        self.all_episodes_data = []
+        # 벡터 환경 지원을 위한 환경별 데이터 저장
+        self.env_data = {}  # 각 환경별 데이터
+        self.all_episodes_data = []  # 모든 환경의 모든 에피소드
+        self.total_episode_count = 0  # 모든 환경의 총 에피소드 수
         
-        # 현재 에피소드 추적
-        self.current_episode_steps = []
-        self.current_episode_distances = []
-        self.current_episode_evader_dv = []
-        self.current_episode_pursuer_dv = []
-        self.episode_count = 0
-        self.episode_start_step = 0
-        
+    def _init_env_tracking(self, env_idx):
+        """환경별 추적 데이터 초기화"""
+        if env_idx not in self.env_data:
+            self.env_data[env_idx] = {
+                'current_steps': [],
+                'current_distances': [],
+                'current_evader_dv': [],
+                'current_pursuer_dv': [],
+                'episode_count': 0,
+                'episode_start_step': 0
+            }
+    
     def _on_step(self):
-        # 현재 환경 정보 가져오기
+        # 환경 정보 가져오기
         obs = self.locals.get('new_obs', self.locals.get('obs'))
         infos = self.locals.get('infos', [{}])
+        dones = self.locals.get('dones', [False])
         
-        if len(infos) > 0:
-            info = infos[0]
+        # 벡터 환경인지 확인
+        is_vectorized = isinstance(dones, np.ndarray)
+        n_envs = len(dones) if is_vectorized else 1
+        
+        # 각 환경 처리
+        for env_idx in range(n_envs):
+            self._init_env_tracking(env_idx)
+            
+            # 현재 환경의 정보
+            info = infos[env_idx] if is_vectorized else infos[0] if infos else {}
+            done = dones[env_idx] if is_vectorized else dones
             
             # 상대 거리와 Delta-V 정보 추출
             relative_distance = info.get('relative_distance_m', 0)
             evader_dv_mag = info.get('evader_dv_magnitude', 0)
             pursuer_dv_mag = info.get('pursuer_dv_magnitude', 0)
             
-            # 현재 에피소드 데이터에 추가
-            current_step = len(self.current_episode_steps)
-            self.current_episode_steps.append(current_step)
-            self.current_episode_distances.append(relative_distance)
-            self.current_episode_evader_dv.append(evader_dv_mag)
-            self.current_episode_pursuer_dv.append(pursuer_dv_mag)
+            # 현재 환경의 데이터에 추가
+            env_data = self.env_data[env_idx]
+            current_step = len(env_data['current_steps'])
+            env_data['current_steps'].append(current_step)
+            env_data['current_distances'].append(relative_distance)
+            env_data['current_evader_dv'].append(evader_dv_mag)
+            env_data['current_pursuer_dv'].append(pursuer_dv_mag)
             
             # 에피소드 종료 시
-            if 'outcome' in info:
-                self.episode_count += 1
+            if done and 'outcome' in info:
+                self.total_episode_count += 1
+                env_data['episode_count'] += 1
                 
                 # 에피소드 데이터 저장
                 episode_data = {
-                    'episode_num': self.episode_count,
-                    'start_step': self.episode_start_step,
+                    'env_id': env_idx,
+                    'episode_num': self.total_episode_count,
+                    'env_episode_num': env_data['episode_count'],
+                    'start_step': env_data['episode_start_step'],
                     'end_step': self.n_calls,
-                    'steps': self.current_episode_steps.copy(),
+                    'steps': env_data['current_steps'].copy(),
                     'outcome': info['outcome'],
                     'final_distance': relative_distance,
-                    'total_evader_dv': sum(self.current_episode_evader_dv),
-                    'total_pursuer_dv': sum(self.current_episode_pursuer_dv),
-                    'distances': self.current_episode_distances.copy(),
-                    'evader_dvs': self.current_episode_evader_dv.copy(),
-                    'pursuer_dvs': self.current_episode_pursuer_dv.copy()
+                    'total_evader_dv': sum(env_data['current_evader_dv']),
+                    'total_pursuer_dv': sum(env_data['current_pursuer_dv']),
+                    'distances': env_data['current_distances'].copy(),
+                    'evader_dvs': env_data['current_evader_dv'].copy(),
+                    'pursuer_dvs': env_data['current_pursuer_dv'].copy()
                 }
                 
                 self.all_episodes_data.append(episode_data)
                 
-                # 100번째 에피소드마다 해당 에피소드의 상세 플롯 생성
-                if self.episode_count % self.episode_plot_freq == 0:
+                # 100번째 전체 에피소드마다 해당 에피소드의 상세 플롯 생성
+                if self.total_episode_count % self.episode_plot_freq == 0:
                     self._plot_single_episode(episode_data)
                 
-                # 현재 에피소드 데이터 초기화
-                self.current_episode_steps = []
-                self.current_episode_distances = []
-                self.current_episode_evader_dv = []
-                self.current_episode_pursuer_dv = []
-                self.episode_start_step = self.n_calls
+                # 현재 환경의 데이터 초기화
+                env_data['current_steps'] = []
+                env_data['current_distances'] = []
+                env_data['current_evader_dv'] = []
+                env_data['current_pursuer_dv'] = []
+                env_data['episode_start_step'] = self.n_calls
         
         # plot_freq마다 전체 학습 분석 플롯 생성
         if self.n_calls % self.plot_freq == 0 and self.n_calls > 0:
@@ -556,6 +576,7 @@ class DetailedAnalysisCallback(BaseCallback):
     def _plot_single_episode(self, episode_data):
         """단일 에피소드의 상세 플롯 생성"""
         episode_num = episode_data['episode_num']
+        env_id = episode_data['env_id']
         
         plt.figure(figsize=(15, 10))
         
@@ -569,7 +590,7 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.axhline(y=50000, color='g', linestyle='--', label='Evasion Distance', alpha=0.7)
         plt.xlabel('Episode Steps')
         plt.ylabel('Relative Distance (m)')
-        plt.title(f'Episode {episode_num}: Distance Over Time (Outcome: {episode_data["outcome"]})')
+        plt.title(f'Episode {episode_num} (Env {env_id}): Distance Over Time (Outcome: {episode_data["outcome"]})')
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.yscale('log')
@@ -602,7 +623,7 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.close()
         
         if self.verbose:
-            print(f"\n[Episode {episode_num}] 상세 플롯 저장: {self.save_dir}/episode_{episode_num}_details.png")
+            print(f"\n[Episode {episode_num} (Env {env_id})] 상세 플롯 저장")
             print(f"  - 결과: {episode_data['outcome']}")
             print(f"  - 최종 거리: {episode_data['final_distance']:.1f} m")
             print(f"  - 총 Delta-V - 회피자: {episode_data['total_evader_dv']:.1f} m/s, 추격자: {episode_data['total_pursuer_dv']:.1f} m/s")
@@ -615,56 +636,75 @@ class DetailedAnalysisCallback(BaseCallback):
         # 1. 에피소드별 결과 요약
         self._plot_episode_summary()
         
-        # 2. 전체 학습 과정의 Delta-V 사용 패턴
-        self._plot_overall_deltav_pattern()
+        # 2. 환경별 통계
+        self._plot_env_statistics()
         
         if self.verbose:
             print(f"\n[Step {self.n_calls}] 전체 분석 플롯 생성 완료")
+            print(f"  - 총 에피소드: {self.total_episode_count}")
+            print(f"  - 환경 수: {len(self.env_data)}")
     
     def _plot_episode_summary(self):
-        """에피소드별 요약 통계"""
+        """모든 환경의 에피소드별 요약 통계"""
         episodes = [ep['episode_num'] for ep in self.all_episodes_data]
+        env_ids = [ep['env_id'] for ep in self.all_episodes_data]
         outcomes = [ep['outcome'] for ep in self.all_episodes_data]
         final_distances = [ep['final_distance'] for ep in self.all_episodes_data]
         total_evader_dvs = [ep['total_evader_dv'] for ep in self.all_episodes_data]
         total_pursuer_dvs = [ep['total_pursuer_dv'] for ep in self.all_episodes_data]
         
+        # 색상 맵 (환경별로 다른 마커)
+        env_markers = ['o', 's', '^', 'v', '<', '>', 'p', '*', 'h', 'D', 'd', 'P', 'X', '8', '|', '_']
+        
         plt.figure(figsize=(15, 10))
         
-        # 1. 최종 거리 분포
+        # 1. 최종 거리 분포 (환경별로 다른 마커)
         plt.subplot(2, 2, 1)
-        plt.scatter(episodes, final_distances, c=['red' if 'CAPTURED' in o else 'green' if 'EVADED' in o else 'orange' for o in outcomes], alpha=0.6)
+        for env_id in sorted(set(env_ids)):
+            env_episodes = [(i, ep) for i, ep in enumerate(self.all_episodes_data) if ep['env_id'] == env_id]
+            if env_episodes:
+                indices = [i for i, _ in env_episodes]
+                distances = [ep['final_distance'] for _, ep in env_episodes]
+                plt.scatter([episodes[i] for i in indices], distances, 
+                           marker=env_markers[env_id % len(env_markers)], 
+                           alpha=0.6, label=f'Env {env_id}', s=30)
+        
         plt.axhline(y=1000, color='r', linestyle='--', alpha=0.5)
         plt.axhline(y=50000, color='g', linestyle='--', alpha=0.5)
-        plt.xlabel('Episode')
+        plt.xlabel('Total Episode Number')
         plt.ylabel('Final Distance (m)')
-        plt.title('Final Distance per Episode')
+        plt.title('Final Distance per Episode (All Environments)')
         plt.yscale('log')
         plt.grid(True, alpha=0.3)
+        if len(set(env_ids)) <= 8:  # 환경이 8개 이하일 때만 범례 표시
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         
         # 2. 회피자 연료 사용량
         plt.subplot(2, 2, 2)
-        plt.scatter(episodes, total_evader_dvs, c='green', alpha=0.6)
-        plt.xlabel('Episode')
+        plt.scatter(episodes, total_evader_dvs, c=env_ids, cmap='tab20', alpha=0.6, s=30)
+        plt.xlabel('Total Episode Number')
         plt.ylabel('Total Evader Delta-V (m/s)')
         plt.title('Evader Fuel Usage per Episode')
         plt.grid(True, alpha=0.3)
+        plt.colorbar(label='Environment ID')
         
         # 3. 추격자 연료 사용량
         plt.subplot(2, 2, 3)
-        plt.scatter(episodes, total_pursuer_dvs, c='red', alpha=0.6)
-        plt.xlabel('Episode')
+        plt.scatter(episodes, total_pursuer_dvs, c=env_ids, cmap='tab20', alpha=0.6, s=30)
+        plt.xlabel('Total Episode Number')
         plt.ylabel('Total Pursuer Delta-V (m/s)')
         plt.title('Pursuer Fuel Usage per Episode')
         plt.grid(True, alpha=0.3)
+        plt.colorbar(label='Environment ID')
         
         # 4. 결과 분포
         plt.subplot(2, 2, 4)
         outcome_types, counts = np.unique(outcomes, return_counts=True)
-        plt.bar(outcome_types, counts, color=['red' if 'CAPTURED' in o else 'green' if 'EVADED' in o else 'orange' for o in outcome_types])
+        colors = ['red' if 'CAPTURED' in o else 'green' if 'EVADED' in o else 'orange' for o in outcome_types]
+        plt.bar(outcome_types, counts, color=colors)
         plt.xlabel('Outcome')
-        plt.ylabel('Count')
-        plt.title('Episode Outcome Distribution')
+        plt.ylabel('Count (All Environments)')
+        plt.title(f'Episode Outcome Distribution (Total: {self.total_episode_count})')
         plt.xticks(rotation=45, ha='right')
         plt.grid(True, alpha=0.3, axis='y')
         
@@ -672,74 +712,124 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.savefig(f'{self.save_dir}/episode_summary_step_{self.n_calls}.png', dpi=150)
         plt.close()
     
-    def _plot_overall_deltav_pattern(self):
-        """전체 Delta-V 사용 패턴 분석"""
-        # 모든 에피소드의 Delta-V를 연결
-        all_evader_dvs = []
-        all_pursuer_dvs = []
-        episode_boundaries = []
-        
-        for ep in self.all_episodes_data:
-            all_evader_dvs.extend(ep['evader_dvs'])
-            all_pursuer_dvs.extend(ep['pursuer_dvs'])
-            episode_boundaries.append(len(all_evader_dvs))
-        
-        if not all_evader_dvs:
+    def _plot_env_statistics(self):
+        """환경별 통계 비교"""
+        if len(self.env_data) <= 1:
             return
         
-        plt.figure(figsize=(15, 8))
+        plt.figure(figsize=(12, 8))
         
-        # 1. 누적 Delta-V
-        plt.subplot(2, 1, 1)
-        steps = range(len(all_evader_dvs))
-        cumulative_evader = np.cumsum(all_evader_dvs)
-        cumulative_pursuer = np.cumsum(all_pursuer_dvs)
+        env_ids = sorted(self.env_data.keys())
+        env_episode_counts = [self.env_data[env_id]['episode_count'] for env_id in env_ids]
         
-        plt.plot(steps, cumulative_evader, 'g-', label='Evader (Cumulative)', linewidth=1.5)
-        plt.plot(steps, cumulative_pursuer, 'r-', label='Pursuer (Cumulative)', linewidth=1.5)
+        # 각 환경의 결과 통계
+        env_outcomes = {env_id: {'captured': 0, 'evaded': 0, 'fuel_depleted': 0, 'other': 0} 
+                       for env_id in env_ids}
         
-        # 에피소드 경계 표시
-        for boundary in episode_boundaries[:-1]:
-            plt.axvline(x=boundary, color='gray', linestyle=':', alpha=0.5)
+        for ep in self.all_episodes_data:
+            outcome = ep['outcome']
+            env_id = ep['env_id']
+            if 'CAPTURED' in outcome.upper():
+                env_outcomes[env_id]['captured'] += 1
+            elif 'EVADED' in outcome.upper():
+                env_outcomes[env_id]['evaded'] += 1
+            elif 'FUEL' in outcome.upper():
+                env_outcomes[env_id]['fuel_depleted'] += 1
+            else:
+                env_outcomes[env_id]['other'] += 1
         
-        plt.xlabel('Total Steps Across All Episodes')
-        plt.ylabel('Cumulative Delta-V (m/s)')
-        plt.title('Cumulative Delta-V Usage Across Training')
+        # 1. 환경별 에피소드 수
+        plt.subplot(2, 2, 1)
+        plt.bar(env_ids, env_episode_counts, color='skyblue')
+        plt.xlabel('Environment ID')
+        plt.ylabel('Episode Count')
+        plt.title('Episodes per Environment')
+        plt.grid(True, alpha=0.3, axis='y')
+        
+        # 2. 환경별 결과 분포 (stacked bar)
+        plt.subplot(2, 2, 2)
+        captured = [env_outcomes[env_id]['captured'] for env_id in env_ids]
+        evaded = [env_outcomes[env_id]['evaded'] for env_id in env_ids]
+        fuel_depleted = [env_outcomes[env_id]['fuel_depleted'] for env_id in env_ids]
+        other = [env_outcomes[env_id]['other'] for env_id in env_ids]
+        
+        plt.bar(env_ids, captured, label='Captured', color='red', alpha=0.8)
+        plt.bar(env_ids, evaded, bottom=captured, label='Evaded', color='green', alpha=0.8)
+        plt.bar(env_ids, fuel_depleted, bottom=np.array(captured)+np.array(evaded), 
+                label='Fuel Depleted', color='orange', alpha=0.8)
+        plt.bar(env_ids, other, bottom=np.array(captured)+np.array(evaded)+np.array(fuel_depleted), 
+                label='Other', color='gray', alpha=0.8)
+        
+        plt.xlabel('Environment ID')
+        plt.ylabel('Outcome Count')
+        plt.title('Outcome Distribution per Environment')
         plt.legend()
-        plt.grid(True, alpha=0.3)
+        plt.grid(True, alpha=0.3, axis='y')
         
-        # 2. 이동 평균 Delta-V
-        plt.subplot(2, 1, 2)
-        window = min(50, len(all_evader_dvs) // 20)
-        if window > 1:
-            evader_ma = np.convolve(all_evader_dvs, np.ones(window)/window, mode='valid')
-            pursuer_ma = np.convolve(all_pursuer_dvs, np.ones(window)/window, mode='valid')
-            steps_ma = range(len(evader_ma))
-            
-            plt.plot(steps_ma, evader_ma, 'g-', label='Evader (MA)', linewidth=2)
-            plt.plot(steps_ma, pursuer_ma, 'r-', label='Pursuer (MA)', linewidth=2)
+        # 3. 환경별 평균 Delta-V
+        plt.subplot(2, 2, 3)
+        avg_evader_dv = {}
+        avg_pursuer_dv = {}
         
-        plt.xlabel('Total Steps Across All Episodes')
-        plt.ylabel('Delta-V per Step (m/s)')
-        plt.title('Instantaneous Delta-V Usage (Moving Average)')
+        for env_id in env_ids:
+            env_episodes = [ep for ep in self.all_episodes_data if ep['env_id'] == env_id]
+            if env_episodes:
+                avg_evader_dv[env_id] = np.mean([ep['total_evader_dv'] for ep in env_episodes])
+                avg_pursuer_dv[env_id] = np.mean([ep['total_pursuer_dv'] for ep in env_episodes])
+        
+        x = np.arange(len(env_ids))
+        width = 0.35
+        
+        plt.bar(x - width/2, [avg_evader_dv.get(env_id, 0) for env_id in env_ids], 
+                width, label='Evader', color='green', alpha=0.8)
+        plt.bar(x + width/2, [avg_pursuer_dv.get(env_id, 0) for env_id in env_ids], 
+                width, label='Pursuer', color='red', alpha=0.8)
+        
+        plt.xlabel('Environment ID')
+        plt.ylabel('Average Delta-V (m/s)')
+        plt.title('Average Fuel Usage per Environment')
+        plt.xticks(x, env_ids)
         plt.legend()
-        plt.grid(True, alpha=0.3)
+        plt.grid(True, alpha=0.3, axis='y')
+        
+        # 4. 요약 통계
+        plt.subplot(2, 2, 4)
+        plt.axis('off')
+        summary_text = f"""
+Total Episodes: {self.total_episode_count}
+Active Environments: {len(self.env_data)}
+Avg Episodes/Env: {self.total_episode_count / max(len(self.env_data), 1):.1f}
+
+Overall Success Rate: {sum(evaded) / max(self.total_episode_count, 1):.1%}
+Overall Capture Rate: {sum(captured) / max(self.total_episode_count, 1):.1%}
+Overall Fuel Depletion: {sum(fuel_depleted) / max(self.total_episode_count, 1):.1%}
+        """
+        plt.text(0.1, 0.5, summary_text, fontsize=12, verticalalignment='center', 
+                fontfamily='monospace', bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
         
         plt.tight_layout()
-        plt.savefig(f'{self.save_dir}/overall_deltav_pattern_step_{self.n_calls}.png', dpi=150)
+        plt.savefig(f'{self.save_dir}/env_statistics_step_{self.n_calls}.png', dpi=150)
         plt.close()
     
     def on_training_end(self):
         """학습 종료 시 최종 분석"""
         self._generate_overall_plots()
         self._save_data()
+        
+        if self.verbose:
+            print(f"\n=== 학습 완료 통계 ===")
+            print(f"총 에피소드: {self.total_episode_count}")
+            print(f"활성 환경 수: {len(self.env_data)}")
+            for env_id, data in self.env_data.items():
+                print(f"  - 환경 {env_id}: {data['episode_count']} 에피소드")
     
     def _save_data(self):
         """수집된 데이터 저장"""
         import pickle
         data = {
             'all_episodes_data': self.all_episodes_data,
-            'total_episodes': self.episode_count,
+            'env_data': self.env_data,
+            'total_episode_count': self.total_episode_count,
             'total_steps': self.n_calls
         }
         
@@ -748,4 +838,3 @@ class DetailedAnalysisCallback(BaseCallback):
         
         if self.verbose:
             print(f"\n분석 데이터 저장 완료: {self.save_dir}/analysis_data.pkl")
-            print(f"총 {self.episode_count}개 에피소드, {self.n_calls} 스텝 학습")
