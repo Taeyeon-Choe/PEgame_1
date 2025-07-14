@@ -469,22 +469,24 @@ class PursuitEvasionEnv(gym.Env):
         current_orbit_index = self.complete_orbits % 3
         return self.orbit_modes[current_orbit_index]
 
-    def step(
-        self, normalized_action_e: np.ndarray
-    ) -> Tuple[np.ndarray, float, bool, Dict]:
-        """환경 스텝 실행"""
+    def step(self, normalized_action_e: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
+        """환경 스텝 실행 - 수정된 버전"""
         # 현재 궤도 모드 확인
         self.current_orbit_mode = self.get_current_orbit_mode()
         
+        # 스텝 시작 시 현재 연료 사용량 저장 (delta-v 계산용)
+        prev_total_delta_v_e = self.total_delta_v_e
+        prev_pursuer_action = self.pursuer_last_action.copy() if hasattr(self, 'pursuer_last_action') else np.zeros(3)
+        
         # 정규화된 액션을 실제 delta-v로 변환
         action_e = self._denormalize_action(normalized_action_e)
-
+    
         # NaN 체크
         if np.isnan(action_e).any():
             if self.debug_mode:
                 print(f"WARNING: action_e에 NaN 값 감지됨: {action_e}")
             action_e = np.zeros_like(action_e)
-
+    
         # 현재 모드에 따라 delta-v 적용 여부 결정
         if self.current_orbit_mode == 'game':
             # 게임 모드: delta-v 정상 적용
@@ -507,18 +509,16 @@ class PursuitEvasionEnv(gym.Env):
             
             if self.debug_mode and self.step_count % 100 == 0:
                 print(f"관찰 모드 (궤도 {self.complete_orbits + 1}): delta-v 적용하지 않음")
-
-        # 궤도 업데이트 (회피자 델타-V 적용 - 게임 모드일 때만)
+    
+        # 궤도 업데이트 및 시뮬레이션 (기존 코드와 동일)
         if self.current_orbit_mode == 'game' and np.any(delta_v_e != 0):
             self._apply_evader_delta_v(delta_v_e)
-
-        # 추격자 델타-V 적용 (상대 속도에 직접 - 게임 모드일 때만)
+    
         if self.current_orbit_mode == 'game' and np.any(delta_v_p != 0):
             self.state[3:] += delta_v_p
-
-        # 상대 운동 시뮬레이션 (항상 수행)
+    
         self._simulate_relative_motion()
-
+    
         # 시간 및 스텝 업데이트
         self.t += self.dt
         self.step_count += 1
@@ -531,59 +531,61 @@ class PursuitEvasionEnv(gym.Env):
             if self.debug_mode:
                 new_mode = self.get_current_orbit_mode()
                 print(f"궤도 {self.complete_orbits} 완료, 다음 모드: {new_mode}")
-
-        # 종료 조건 확인 - 3궤도 주기 고려
+    
+        # 종료 조건 확인
         done, termination_info = self.check_orbital_period_termination()
-
-        # 매 스텝 기록할 추가 정보 계산
-        relative_distance_m = np.linalg.norm(self.state[:3])
-        pursuer_dv_mag = np.linalg.norm(delta_v_p)
-
-        termination_info.update(
-            {
-                "relative_distance_m": relative_distance_m,
-                "evader_dv_magnitude": delta_v_e_mag,
-                "pursuer_dv_magnitude": pursuer_dv_mag,
-            }
-        )
-
+    
         # 보상 계산
         evader_reward, pursuer_reward, info = self._calculate_rewards(
             done, termination_info, delta_v_e_mag
         )
-
+    
         # Nash Equilibrium 메트릭 업데이트
         self._update_nash_metric()
-
+    
         # 보상 히스토리 저장
         self.reward_history.append({"evader": evader_reward, "pursuer": pursuer_reward})
-
+    
         # 관측값 생성
         observed_state = self.observe(self.state)
         normalized_obs = self._normalize_obs(observed_state, self.pursuer_last_action)
-
-        # 추가 정보
-        info.update(
-            {
-                "nash_metric": self.nash_metric,
-                "evader_delta_v_sum": self.delta_v_e_sum.copy(),
-                "evader_impulse_count": len(self.evader_impulse_history),
-                "complete_orbits": self.complete_orbits,
-                "orbital_phase": self.orbit_time_tracker / self.orbital_period,
-                "current_orbit_mode": self.current_orbit_mode,
-                "relative_distance_m": relative_distance_m,
-                "evader_dv_magnitude": delta_v_e_mag,
-                "pursuer_dv_magnitude": pursuer_dv_mag,
-            }
-        )
-
+    
+        # ========== 수정된 부분: 콜백이 기대하는 키들 추가 ==========
+        # 현재 상태 정보
+        current_relative_distance = np.linalg.norm(self.state[:3])
+        step_evader_dv = self.total_delta_v_e - prev_total_delta_v_e
+        step_pursuer_dv = np.linalg.norm(delta_v_p)
+        
+        # 기존 info 업데이트
+        info.update({
+            # 콜백이 기대하는 키들
+            "relative_distance_m": current_relative_distance,
+            "evader_dv_magnitude": step_evader_dv,
+            "pursuer_dv_magnitude": step_pursuer_dv,
+            
+            # 추가 유용한 정보
+            "total_evader_delta_v": self.total_delta_v_e,
+            "remaining_fuel": self.max_delta_v_budget - self.total_delta_v_e,
+            "fuel_fraction_used": self.total_delta_v_e / self.max_delta_v_budget,
+            
+            # 기존 정보들도 유지
+            "nash_metric": self.nash_metric,
+            "evader_delta_v_sum": self.delta_v_e_sum.copy(),
+            "evader_impulse_count": len(self.evader_impulse_history),
+            "complete_orbits": self.complete_orbits,
+            "orbital_phase": self.orbit_time_tracker / self.orbital_period,
+            "current_orbit_mode": self.current_orbit_mode,
+        })
+    
+        # 종료 시 추가 정보
         if "outcome" in termination_info:
             info["termination_type"] = termination_info["outcome"]
+            info["outcome"] = termination_info["outcome"]  # 콜백 호환성
             if "buffer_time" in termination_info:
                 info["buffer_time"] = termination_info["buffer_time"]
             if "orbit_consistency" in termination_info:
                 info["orbit_consistency"] = termination_info["orbit_consistency"]
-
+    
         return normalized_obs, evader_reward, done, info
 
     def _apply_evader_delta_v(self, delta_v_e: np.ndarray):
