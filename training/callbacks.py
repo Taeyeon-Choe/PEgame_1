@@ -520,18 +520,41 @@ class DetailedAnalysisCallback(BaseCallback):
             evader_dv_mag = info.get('evader_dv_magnitude', 0)
             pursuer_dv_mag = info.get('pursuer_dv_magnitude', 0)
             
+            # 모드 정보 추출
+            is_game_mode = info.get('is_game_mode', True)
+            current_orbit_mode = info.get('current_orbit_mode', 'unknown')
+            
             # 현재 환경의 데이터에 추가
             env_data = self.env_data[env_idx]
             current_step = len(env_data['current_steps'])
             env_data['current_steps'].append(current_step)
             env_data['current_distances'].append(relative_distance)
+            
+            # 게임 모드일 때만 delta-v 기록 (또는 모든 스텝 기록)
             env_data['current_evader_dv'].append(evader_dv_mag)
             env_data['current_pursuer_dv'].append(pursuer_dv_mag)
+            
+            # 모드 정보도 추가로 기록
+            if 'orbit_modes' not in env_data:
+                env_data['orbit_modes'] = []
+            env_data['orbit_modes'].append(current_orbit_mode)
             
             # 에피소드 종료 시
             if done and 'outcome' in info:
                 self.total_episode_count += 1
                 env_data['episode_count'] += 1
+                
+                # 게임 모드에서의 실제 delta-v만 계산
+                game_mode_indices = [i for i, mode in enumerate(env_data['orbit_modes']) if mode == 'game']
+                
+                if game_mode_indices:
+                    game_evader_dvs = [env_data['current_evader_dv'][i] for i in game_mode_indices]
+                    game_pursuer_dvs = [env_data['current_pursuer_dv'][i] for i in game_mode_indices]
+                    total_evader_dv = sum(game_evader_dvs)
+                    total_pursuer_dv = sum(game_pursuer_dvs)
+                else:
+                    total_evader_dv = sum(env_data['current_evader_dv'])
+                    total_pursuer_dv = sum(env_data['current_pursuer_dv'])
                 
                 # 에피소드 데이터 저장
                 episode_data = {
@@ -543,11 +566,14 @@ class DetailedAnalysisCallback(BaseCallback):
                     'steps': env_data['current_steps'].copy(),
                     'outcome': info['outcome'],
                     'final_distance': relative_distance,
-                    'total_evader_dv': sum(env_data['current_evader_dv']),
-                    'total_pursuer_dv': sum(env_data['current_pursuer_dv']),
+                    'total_evader_dv': total_evader_dv,  # 게임 모드에서의 총 delta-v
+                    'total_pursuer_dv': total_pursuer_dv,  # 게임 모드에서의 총 delta-v
                     'distances': env_data['current_distances'].copy(),
                     'evader_dvs': env_data['current_evader_dv'].copy(),
-                    'pursuer_dvs': env_data['current_pursuer_dv'].copy()
+                    'pursuer_dvs': env_data['current_pursuer_dv'].copy(),
+                    'orbit_modes': env_data['orbit_modes'].copy(),  # 모드 정보 추가
+                    'game_mode_steps': len(game_mode_indices),  # 게임 모드 스텝 수
+                    'total_steps': len(env_data['current_steps'])  # 전체 스텝 수
                 }
                 
                 self.all_episodes_data.append(episode_data)
@@ -561,6 +587,7 @@ class DetailedAnalysisCallback(BaseCallback):
                 env_data['current_distances'] = []
                 env_data['current_evader_dv'] = []
                 env_data['current_pursuer_dv'] = []
+                env_data['orbit_modes'] = []
                 env_data['episode_start_step'] = self.n_calls
         
         # plot_freq마다 전체 학습 분석 플롯 생성
