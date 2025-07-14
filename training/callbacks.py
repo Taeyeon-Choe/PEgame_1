@@ -469,7 +469,7 @@ class LearningRateScheduler(BaseCallback):
         return True
 
 
-class DetailedAnalysisCallback:
+class DetailedAnalysisCallback(BaseCallback):
     """벡터 환경을 지원하는 상세 분석 콜백"""
     
     def __init__(self, plot_freq=1000, save_dir="./analysis_plots", 
