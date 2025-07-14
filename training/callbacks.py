@@ -793,11 +793,11 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.close()
     
     def _plot_env_statistics(self):
-        """환경별 통계 비교"""
+        """환경별 통계 비교 - 게임 모드 delta-v만 고려"""
         if len(self.env_data) <= 1:
             return
         
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(14, 10))
         
         env_ids = sorted(self.env_data.keys())
         env_episode_counts = [self.env_data[env_id]['episode_count'] for env_id in env_ids]
@@ -809,17 +809,17 @@ class DetailedAnalysisCallback(BaseCallback):
         for ep in self.all_episodes_data:
             outcome = ep['outcome']
             env_id = ep['env_id']
-            if 'CAPTURED' in outcome.upper():
+            if 'captured' in outcome.lower():
                 env_outcomes[env_id]['captured'] += 1
-            elif 'EVADED' in outcome.upper():
+            elif 'evaded' in outcome.lower() or 'evasion' in outcome.lower():
                 env_outcomes[env_id]['evaded'] += 1
-            elif 'FUEL' in outcome.upper():
+            elif 'fuel' in outcome.lower():
                 env_outcomes[env_id]['fuel_depleted'] += 1
             else:
                 env_outcomes[env_id]['other'] += 1
         
         # 1. 환경별 에피소드 수
-        plt.subplot(2, 2, 1)
+        plt.subplot(3, 2, 1)
         plt.bar(env_ids, env_episode_counts, color='skyblue')
         plt.xlabel('Environment ID')
         plt.ylabel('Episode Count')
@@ -827,7 +827,7 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.grid(True, alpha=0.3, axis='y')
         
         # 2. 환경별 결과 분포 (stacked bar)
-        plt.subplot(2, 2, 2)
+        plt.subplot(3, 2, 2)
         captured = [env_outcomes[env_id]['captured'] for env_id in env_ids]
         evaded = [env_outcomes[env_id]['evaded'] for env_id in env_ids]
         fuel_depleted = [env_outcomes[env_id]['fuel_depleted'] for env_id in env_ids]
@@ -846,14 +846,15 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.legend()
         plt.grid(True, alpha=0.3, axis='y')
         
-        # 3. 환경별 평균 Delta-V
-        plt.subplot(2, 2, 3)
+        # 3. 환경별 평균 Delta-V (게임 모드만)
+        plt.subplot(3, 2, 3)
         avg_evader_dv = {}
         avg_pursuer_dv = {}
         
         for env_id in env_ids:
             env_episodes = [ep for ep in self.all_episodes_data if ep['env_id'] == env_id]
             if env_episodes:
+                # 게임 모드 delta-v만 사용
                 avg_evader_dv[env_id] = np.mean([ep['total_evader_dv'] for ep in env_episodes])
                 avg_pursuer_dv[env_id] = np.mean([ep['total_pursuer_dv'] for ep in env_episodes])
         
@@ -867,24 +868,74 @@ class DetailedAnalysisCallback(BaseCallback):
         
         plt.xlabel('Environment ID')
         plt.ylabel('Average Delta-V (m/s)')
-        plt.title('Average Fuel Usage per Environment')
+        plt.title('Average Fuel Usage per Environment (Game Mode Only)')
         plt.xticks(x, env_ids)
         plt.legend()
         plt.grid(True, alpha=0.3, axis='y')
         
-        # 4. 요약 통계
-        plt.subplot(2, 2, 4)
+        # 4. 환경별 게임 모드 비율
+        plt.subplot(3, 2, 4)
+        game_mode_ratios = {}
+        
+        for env_id in env_ids:
+            env_episodes = [ep for ep in self.all_episodes_data if ep['env_id'] == env_id]
+            if env_episodes:
+                total_steps = sum(ep.get('total_steps', 0) for ep in env_episodes)
+                game_steps = sum(ep.get('game_mode_steps', 0) for ep in env_episodes)
+                game_mode_ratios[env_id] = game_steps / total_steps if total_steps > 0 else 0
+        
+        plt.bar(env_ids, [game_mode_ratios.get(env_id, 0) for env_id in env_ids], 
+                color='purple', alpha=0.7)
+        plt.xlabel('Environment ID')
+        plt.ylabel('Game Mode Ratio')
+        plt.title('Proportion of Steps in Game Mode')
+        plt.ylim(0, 1)
+        plt.grid(True, alpha=0.3, axis='y')
+        
+        # 5. Delta-V 효율성 (성공률 vs 평균 Delta-V)
+        plt.subplot(3, 2, 5)
+        success_rates = []
+        avg_dvs = []
+        
+        for env_id in env_ids:
+            env_episodes = [ep for ep in self.all_episodes_data if ep['env_id'] == env_id]
+            if env_episodes:
+                successes = sum(1 for ep in env_episodes if 'evaded' in ep['outcome'].lower() or 'evasion' in ep['outcome'].lower())
+                success_rate = successes / len(env_episodes) if env_episodes else 0
+                success_rates.append(success_rate)
+                avg_dvs.append(avg_evader_dv.get(env_id, 0))
+        
+        if success_rates and avg_dvs:
+            scatter = plt.scatter(avg_dvs, success_rates, c=env_ids, cmap='viridis', s=100)
+            plt.xlabel('Average Evader Delta-V (m/s)')
+            plt.ylabel('Success Rate')
+            plt.title('Fuel Efficiency vs Success Rate')
+            plt.colorbar(scatter, label='Environment ID')
+            plt.grid(True, alpha=0.3)
+        
+        # 6. 요약 통계
+        plt.subplot(3, 2, 6)
         plt.axis('off')
+        
+        # 전체 통계 계산
+        total_game_steps = sum(ep.get('game_mode_steps', 0) for ep in self.all_episodes_data)
+        total_all_steps = sum(ep.get('total_steps', 0) for ep in self.all_episodes_data)
+        game_mode_ratio = total_game_steps / total_all_steps if total_all_steps > 0 else 0
+        
         summary_text = f"""
-Total Episodes: {self.total_episode_count}
-Active Environments: {len(self.env_data)}
-Avg Episodes/Env: {self.total_episode_count / max(len(self.env_data), 1):.1f}
-
-Overall Success Rate: {sum(evaded) / max(self.total_episode_count, 1):.1%}
-Overall Capture Rate: {sum(captured) / max(self.total_episode_count, 1):.1%}
-Overall Fuel Depletion: {sum(fuel_depleted) / max(self.total_episode_count, 1):.1%}
+    Total Episodes: {self.total_episode_count}
+    Active Environments: {len(self.env_data)}
+    Avg Episodes/Env: {self.total_episode_count / max(len(self.env_data), 1):.1f}
+    
+    Overall Success Rate: {sum(evaded) / max(self.total_episode_count, 1):.1%}
+    Overall Capture Rate: {sum(captured) / max(self.total_episode_count, 1):.1%}
+    Overall Fuel Depletion: {sum(fuel_depleted) / max(self.total_episode_count, 1):.1%}
+    
+    Game Mode Ratio: {game_mode_ratio:.1%}
+    Total Game Steps: {total_game_steps:,}
+    Total All Steps: {total_all_steps:,}
         """
-        plt.text(0.1, 0.5, summary_text, fontsize=12, verticalalignment='center', 
+        plt.text(0.1, 0.5, summary_text, fontsize=11, verticalalignment='center', 
                 fontfamily='monospace', bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
         
         plt.tight_layout()
