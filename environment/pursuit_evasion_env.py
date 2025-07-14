@@ -535,6 +535,18 @@ class PursuitEvasionEnv(gym.Env):
         # 종료 조건 확인 - 3궤도 주기 고려
         done, termination_info = self.check_orbital_period_termination()
 
+        # 매 스텝 기록할 추가 정보 계산
+        relative_distance_m = np.linalg.norm(self.state[:3])
+        pursuer_dv_mag = np.linalg.norm(delta_v_p)
+
+        termination_info.update(
+            {
+                "relative_distance_m": relative_distance_m,
+                "evader_dv_magnitude": delta_v_e_mag,
+                "pursuer_dv_magnitude": pursuer_dv_mag,
+            }
+        )
+
         # 보상 계산
         evader_reward, pursuer_reward, info = self._calculate_rewards(
             done, termination_info, delta_v_e_mag
@@ -559,6 +571,9 @@ class PursuitEvasionEnv(gym.Env):
                 "complete_orbits": self.complete_orbits,
                 "orbital_phase": self.orbit_time_tracker / self.orbital_period,
                 "current_orbit_mode": self.current_orbit_mode,
+                "relative_distance_m": relative_distance_m,
+                "evader_dv_magnitude": delta_v_e_mag,
+                "pursuer_dv_magnitude": pursuer_dv_mag,
             }
         )
 
