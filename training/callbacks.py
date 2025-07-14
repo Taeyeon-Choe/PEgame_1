@@ -597,18 +597,32 @@ class DetailedAnalysisCallback(BaseCallback):
         return True
     
     def _plot_single_episode(self, episode_data):
-        """단일 에피소드의 상세 플롯 생성"""
+        """단일 에피소드의 상세 플롯 생성 - 모드 정보 포함"""
         episode_num = episode_data['episode_num']
         env_id = episode_data['env_id']
         
-        plt.figure(figsize=(15, 10))
+        plt.figure(figsize=(15, 12))
         
-        # 1. 거리 변화
-        plt.subplot(3, 1, 1)
+        # 1. 거리 변화 (모드별 색상 구분)
+        plt.subplot(4, 1, 1)
         steps = episode_data['steps']
         distances = episode_data['distances']
+        orbit_modes = episode_data.get('orbit_modes', ['game'] * len(steps))
         
-        plt.plot(steps, distances, 'b-', linewidth=2)
+        # 모드별로 색상 구분하여 플롯
+        game_indices = [i for i, mode in enumerate(orbit_modes) if mode == 'game']
+        observe_indices = [i for i, mode in enumerate(orbit_modes) if mode == 'observe']
+        
+        if game_indices:
+            plt.scatter([steps[i] for i in game_indices], 
+                       [distances[i] for i in game_indices], 
+                       c='blue', s=10, alpha=0.6, label='Game Mode')
+        if observe_indices:
+            plt.scatter([steps[i] for i in observe_indices], 
+                       [distances[i] for i in observe_indices], 
+                       c='gray', s=10, alpha=0.3, label='Observe Mode')
+        
+        plt.plot(steps, distances, 'k-', linewidth=0.5, alpha=0.3)  # 연결선
         plt.axhline(y=1000, color='r', linestyle='--', label='Capture Distance', alpha=0.7)
         plt.axhline(y=50000, color='g', linestyle='--', label='Evasion Distance', alpha=0.7)
         plt.xlabel('Episode Steps')
@@ -618,27 +632,69 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.grid(True, alpha=0.3)
         plt.yscale('log')
         
-        # 2. Delta-V 사용량 (순간)
-        plt.subplot(3, 1, 2)
-        plt.plot(steps, episode_data['evader_dvs'], 'g-', label='Evader ΔV', linewidth=2, alpha=0.7)
-        plt.plot(steps, episode_data['pursuer_dvs'], 'r-', label='Pursuer ΔV', linewidth=2, alpha=0.7)
+        # 2. Delta-V 사용량 (게임 모드만 표시)
+        plt.subplot(4, 1, 2)
+        evader_dvs = episode_data['evader_dvs']
+        pursuer_dvs = episode_data['pursuer_dvs']
+        
+        # 게임 모드 스텝만 표시
+        if game_indices:
+            game_steps = [steps[i] for i in game_indices]
+            game_evader_dvs = [evader_dvs[i] for i in game_indices]
+            game_pursuer_dvs = [pursuer_dvs[i] for i in game_indices]
+            
+            plt.stem(game_steps, game_evader_dvs, 'g-', markerfmt='go', basefmt=' ', 
+                    label='Evader ΔV (Game Mode)', alpha=0.7)
+            plt.stem(game_steps, game_pursuer_dvs, 'r-', markerfmt='ro', basefmt=' ', 
+                    label='Pursuer ΔV (Game Mode)', alpha=0.7)
+        
         plt.xlabel('Episode Steps')
         plt.ylabel('Instantaneous ΔV (m/s)')
-        plt.title('Delta-V Usage per Step')
+        plt.title('Delta-V Usage per Step (Game Mode Only)')
         plt.legend()
         plt.grid(True, alpha=0.3)
         
-        # 3. 누적 Delta-V
-        plt.subplot(3, 1, 3)
-        cumulative_evader = np.cumsum(episode_data['evader_dvs'])
-        cumulative_pursuer = np.cumsum(episode_data['pursuer_dvs'])
+        # 3. 누적 Delta-V (게임 모드만 누적)
+        plt.subplot(4, 1, 3)
         
-        plt.plot(steps, cumulative_evader, 'g-', label=f'Evader (Total: {cumulative_evader[-1]:.1f} m/s)', linewidth=2)
-        plt.plot(steps, cumulative_pursuer, 'r-', label=f'Pursuer (Total: {cumulative_pursuer[-1]:.1f} m/s)', linewidth=2)
+        # 게임 모드에서만 누적
+        cumulative_evader = np.zeros(len(steps))
+        cumulative_pursuer = np.zeros(len(steps))
+        evader_sum = 0
+        pursuer_sum = 0
+        
+        for i in range(len(steps)):
+            if i in game_indices:
+                evader_sum += evader_dvs[i]
+                pursuer_sum += pursuer_dvs[i]
+            cumulative_evader[i] = evader_sum
+            cumulative_pursuer[i] = pursuer_sum
+        
+        plt.plot(steps, cumulative_evader, 'g-', 
+                label=f'Evader (Total: {evader_sum:.1f} m/s)', linewidth=2)
+        plt.plot(steps, cumulative_pursuer, 'r-', 
+                label=f'Pursuer (Total: {pursuer_sum:.1f} m/s)', linewidth=2)
+        
+        # 모드 전환 시점 표시
+        for i in range(1, len(orbit_modes)):
+            if orbit_modes[i] != orbit_modes[i-1]:
+                plt.axvline(x=steps[i], color='gray', linestyle=':', alpha=0.5)
+        
         plt.xlabel('Episode Steps')
         plt.ylabel('Cumulative ΔV (m/s)')
         plt.title('Cumulative Delta-V Usage')
         plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # 4. 궤도 모드 타임라인
+        plt.subplot(4, 1, 4)
+        mode_values = [1 if mode == 'game' else 0 for mode in orbit_modes]
+        plt.fill_between(steps, 0, mode_values, alpha=0.3, step='post', 
+                        label='Game Mode (1) / Observe Mode (0)')
+        plt.xlabel('Episode Steps')
+        plt.ylabel('Orbit Mode')
+        plt.title('Orbit Mode Timeline')
+        plt.ylim(-0.1, 1.1)
         plt.grid(True, alpha=0.3)
         
         plt.tight_layout()
@@ -649,6 +705,7 @@ class DetailedAnalysisCallback(BaseCallback):
             print(f"\n[Episode {episode_num} (Env {env_id})] 상세 플롯 저장")
             print(f"  - 결과: {episode_data['outcome']}")
             print(f"  - 최종 거리: {episode_data['final_distance']:.1f} m")
+            print(f"  - 게임 모드 스텝: {episode_data.get('game_mode_steps', 'N/A')} / {episode_data.get('total_steps', 'N/A')}")
             print(f"  - 총 Delta-V - 회피자: {episode_data['total_evader_dv']:.1f} m/s, 추격자: {episode_data['total_pursuer_dv']:.1f} m/s")
     
     def _generate_overall_plots(self):
