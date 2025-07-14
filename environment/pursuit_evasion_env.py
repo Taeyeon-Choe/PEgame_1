@@ -510,6 +510,10 @@ class PursuitEvasionEnv(gym.Env):
             if self.debug_mode and self.step_count % 100 == 0:
                 print(f"관찰 모드 (궤도 {self.complete_orbits + 1}): delta-v 적용하지 않음")
     
+        # 실제 이번 스텝의 delta-v 기록 (중요!)
+        actual_evader_dv = delta_v_e_mag  # 실제 적용된 값
+        actual_pursuer_dv = np.linalg.norm(delta_v_p)  # 실제 적용된 값
+    
         # 궤도 업데이트 및 시뮬레이션 (기존 코드와 동일)
         if self.current_orbit_mode == 'game' and np.any(delta_v_e != 0):
             self._apply_evader_delta_v(delta_v_e)
@@ -550,18 +554,16 @@ class PursuitEvasionEnv(gym.Env):
         observed_state = self.observe(self.state)
         normalized_obs = self._normalize_obs(observed_state, self.pursuer_last_action)
     
-        # ========== 수정된 부분: 콜백이 기대하는 키들 추가 ==========
+        # ========== 수정된 부분: 실제 delta-v 값 사용 ==========
         # 현재 상태 정보
         current_relative_distance = np.linalg.norm(self.state[:3])
-        step_evader_dv = self.total_delta_v_e - prev_total_delta_v_e
-        step_pursuer_dv = np.linalg.norm(delta_v_p)
         
         # 기존 info 업데이트
         info.update({
-            # 콜백이 기대하는 키들
+            # 콜백이 기대하는 키들 - 실제 적용된 delta-v 사용
             "relative_distance_m": current_relative_distance,
-            "evader_dv_magnitude": step_evader_dv,
-            "pursuer_dv_magnitude": step_pursuer_dv,
+            "evader_dv_magnitude": actual_evader_dv,  # 수정: 실제 값 사용
+            "pursuer_dv_magnitude": actual_pursuer_dv,  # 수정: 실제 값 사용
             
             # 추가 유용한 정보
             "total_evader_delta_v": self.total_delta_v_e,
@@ -575,6 +577,10 @@ class PursuitEvasionEnv(gym.Env):
             "complete_orbits": self.complete_orbits,
             "orbital_phase": self.orbit_time_tracker / self.orbital_period,
             "current_orbit_mode": self.current_orbit_mode,
+            
+            # 추가: 모드별 delta-v 정보
+            "is_game_mode": self.current_orbit_mode == 'game',
+            "pursuer_action_step": self.step_count % self.k == 0,  # 추격자가 행동한 스텝인지
         })
     
         # 종료 시 추가 정보
