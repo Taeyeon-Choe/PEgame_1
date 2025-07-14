@@ -468,12 +468,8 @@ class LearningRateScheduler(BaseCallback):
         
         return True
 
-import numpy as np
-import matplotlib.pyplot as plt
-import os
-from stable_baselines3.common.callbacks import BaseCallback
 
-class DetailedAnalysisCallback(BaseCallback):
+class DetailedAnalysisCallback:
     """벡터 환경을 지원하는 상세 분석 콜백"""
     
     def __init__(self, plot_freq=1000, save_dir="./analysis_plots", 
