@@ -1,4 +1,5 @@
 """
+pursuit_evasion_env_ga_stm.py
 PEgame 환경: GASTMPropagator를 사용한 STM 통합 버전
 """
 
@@ -6,6 +7,9 @@ import numpy as np
 from typing import Dict, Tuple, Optional
 from environment.pursuit_evasion_env import PursuitEvasionEnv
 from orbital_mechanics.ga_stm_propagator import GASTMPropagator
+from scipy.integrate import solve_ivp
+from orbital_mechanics.dynamics import relative_dynamics_evader_centered
+
 
 class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
     """
@@ -124,8 +128,211 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
             "pursuer_dv_magnitude": np.linalg.norm(delta_v_p),
             "total_evader_delta_v": self.total_delta_v_e,
             "nash_metric": self.nash_metric,
+            "dynamics_mode": "GA_STM" if self.use_gastm else "Nonlinear"
         })
         if "outcome" in termination_info:
             info["outcome"] = termination_info["outcome"]
 
         return normalized_obs, evader_reward, done, info
+
+    def compare_propagation_methods(self, test_duration: float = 300.0, 
+                                  control_sequence: Optional[np.ndarray] = None) -> Dict:
+        """
+        GA STM과 비선형 전파 방법을 비교합니다.
+        
+        Args:
+            test_duration: 테스트 지속 시간 (초)
+            control_sequence: 선택적 제어 시퀀스
+            
+        Returns:
+            비교 결과 딕셔너리
+        """
+        # 초기 상태 저장
+        initial_state = self.state.copy()
+        initial_evader_state = self.evader_orbit.get_state(self.t)
+        initial_time = self.t
+        initial_step = self.step_count
+        
+        # 스텝 수 계산
+        n_steps = int(test_duration / self.dt)
+        
+        # 제어 시퀀스 생성 (제공되지 않은 경우)
+        if control_sequence is None:
+            control_sequence = []
+            for i in range(n_steps):
+                # 간단한 추격 전략
+                rel_pos = self.state[:3]
+                pursuit_direction = -rel_pos / np.linalg.norm(rel_pos)
+                action = pursuit_direction * 0.01  # 정규화된 액션
+                control_sequence.append(action)
+            control_sequence = np.array(control_sequence)
+        
+        # 비선형 동역학으로 실행
+        self.use_gastm = False
+        nonlinear_states = [initial_state.copy()]
+        
+        for i in range(n_steps):
+            obs, _, _, _ = self.step(control_sequence[i])
+            nonlinear_states.append(self.state.copy())
+        
+        # 초기 상태로 리셋
+        self.state = initial_state.copy()
+        self.evader_orbit.set_state(initial_evader_state)
+        self.t = initial_time
+        self.step_count = initial_step
+        
+        # GA STM으로 실행
+        self.use_gastm = True
+        self.gastm_propagator = GASTMPropagator(
+            chief_orbit=self.evader_orbit,
+            initial_relative_state=self.state,
+            config=self.config
+        )
+        gastm_states = [initial_state.copy()]
+        
+        for i in range(n_steps):
+            obs, _, _, _ = self.step(control_sequence[i])
+            gastm_states.append(self.state.copy())
+        
+        # 배열로 변환
+        nonlinear_states = np.array(nonlinear_states)
+        gastm_states = np.array(gastm_states)
+        
+        # 오차 계산
+        position_errors = np.linalg.norm(
+            nonlinear_states[:, :3] - gastm_states[:, :3], axis=1
+        )
+        velocity_errors = np.linalg.norm(
+            nonlinear_states[:, 3:] - gastm_states[:, 3:], axis=1
+        )
+        
+        # 시간 배열 생성
+        time_array = np.arange(len(position_errors)) * self.dt
+        
+        return {
+            'time': time_array,
+            'nonlinear_states': nonlinear_states,
+            'gastm_states': gastm_states,
+            'position_errors': position_errors,
+            'velocity_errors': velocity_errors,
+            'max_position_error': np.max(position_errors),
+            'mean_position_error': np.mean(position_errors),
+            'final_position_error': position_errors[-1],
+            'max_velocity_error': np.max(velocity_errors),
+            'mean_velocity_error': np.mean(velocity_errors),
+            'final_velocity_error': velocity_errors[-1]
+        }
+
+
+# 시각화 함수 (환경 클래스 외부)
+def visualize_comparison_results(results: Dict):
+    """
+    GA STM과 비선형 동역학 비교 결과를 시각화합니다.
+    
+    Args:
+        results: compare_propagation_methods()의 결과 딕셔너리
+    """
+    import matplotlib.pyplot as plt
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # 시간을 분 단위로 변환
+    time_min = results['time'] / 60
+    
+    # X-Y 평면 궤적
+    ax = axes[0, 0]
+    ax.plot(results['nonlinear_states'][:, 0]/1000, 
+            results['nonlinear_states'][:, 1]/1000, 
+            'b-', label='Nonlinear', linewidth=2)
+    ax.plot(results['gastm_states'][:, 0]/1000, 
+            results['gastm_states'][:, 1]/1000, 
+            'r--', label='GA STM', linewidth=2)
+    ax.set_xlabel('Radial (km)')
+    ax.set_ylabel('Along-track (km)')
+    ax.set_title('Relative Trajectory (X-Y Plane)')
+    ax.legend()
+    ax.grid(True)
+    ax.axis('equal')
+    
+    # 상대 거리
+    ax = axes[0, 1]
+    nl_dist = np.linalg.norm(results['nonlinear_states'][:, :3], axis=1)
+    ga_dist = np.linalg.norm(results['gastm_states'][:, :3], axis=1)
+    ax.plot(time_min, nl_dist/1000, 'b-', label='Nonlinear', linewidth=2)
+    ax.plot(time_min, ga_dist/1000, 'r--', label='GA STM', linewidth=2)
+    ax.set_xlabel('Time (min)')
+    ax.set_ylabel('Relative Distance (km)')
+    ax.set_title('Separation Distance')
+    ax.legend()
+    ax.grid(True)
+    
+    # 위치 오차
+    ax = axes[1, 0]
+    ax.semilogy(time_min, results['position_errors'], 'g-', linewidth=2)
+    ax.set_xlabel('Time (min)')
+    ax.set_ylabel('Position Error (m)')
+    ax.set_title('Position Error: |Nonlinear - GA STM|')
+    ax.grid(True)
+    
+    # 속도 오차
+    ax = axes[1, 1]
+    ax.semilogy(time_min, results['velocity_errors'], 'm-', linewidth=2)
+    ax.set_xlabel('Time (min)')
+    ax.set_ylabel('Velocity Error (m/s)')
+    ax.set_title('Velocity Error: |Nonlinear - GA STM|')
+    ax.grid(True)
+    
+    plt.tight_layout()
+    
+    # 요약 통계 출력
+    print("\n=== GA STM vs Nonlinear Dynamics Comparison ===")
+    print(f"시뮬레이션 시간: {results['time'][-1]/60:.1f} 분")
+    print(f"\n위치 오차:")
+    print(f"  최대: {results['max_position_error']:.2f} m")
+    print(f"  평균: {results['mean_position_error']:.2f} m")
+    print(f"  최종: {results['final_position_error']:.2f} m")
+    print(f"\n속도 오차:")
+    print(f"  최대: {results['max_velocity_error']:.4f} m/s")
+    print(f"  평균: {results['mean_velocity_error']:.4f} m/s")
+    print(f"  최종: {results['final_velocity_error']:.4f} m/s")
+    
+    return fig
+
+
+# 사용 예시
+if __name__ == "__main__":
+    from config.settings import get_config
+    
+    # 설정 로드
+    config = get_config()
+    config['dt'] = 10.0  # 10초 시간 간격
+    
+    # GA STM 사용 환경 생성
+    print("GA STM 환경 생성 중...")
+    env = PursuitEvasionEnvGASTM(config, use_gastm=True)
+    
+    # 환경 리셋
+    obs = env.reset()
+    print(f"초기 관측값 형상: {obs.shape}")
+    print(f"초기 상대 거리: {np.linalg.norm(env.state[:3]):.1f} m")
+    
+    # 단일 스텝 테스트
+    print("\nGA STM으로 단일 스텝 테스트...")
+    action = np.array([-0.1, 0.0, 0.0])  # 회피자 액션만 (추격자는 자동)
+    obs, reward, done, info = env.step(action)
+    print(f"스텝 후 - 거리: {info['relative_distance_m']:.2f} m")
+    print(f"동역학 모드: {info['dynamics_mode']}")
+    
+    # 방법 비교
+    print("\nGA STM과 비선형 동역학 비교 중...")
+    env.reset()
+    results = env.compare_propagation_methods(test_duration=600.0)  # 10분
+    
+    # 결과 시각화
+    try:
+        import matplotlib.pyplot as plt
+        fig = visualize_comparison_results(results)
+        plt.savefig('gastm_nonlinear_comparison.png', dpi=150)
+        plt.show()
+    except ImportError:
+        print("matplotlib가 설치되지 않아 시각화를 건너뜁니다.")
