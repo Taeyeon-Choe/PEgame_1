@@ -944,6 +944,7 @@ class PursuitEvasionEnv(gym.Env):
             pursuer_reward = termination_info["pursuer_reward"]
             info = termination_info
             self.final_relative_distance = np.linalg.norm(self.state[:3])
+            info['final_distance'] = self.final_relative_distance
         else:
             rho_mag = np.linalg.norm(self.state[:3])
             
