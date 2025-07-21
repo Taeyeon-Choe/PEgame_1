@@ -1,6 +1,7 @@
 """
 pursuit_evasion_env_ga_stm.py
 PEgame 환경: GASTMPropagator를 사용한 STM 통합 버전
+시간 동기화 문제 해결 버전
 """
 
 import numpy as np
@@ -15,7 +16,6 @@ from orbital_mechanics.dynamics import relative_dynamics_evader_centered
 class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
     """
     Gim-Alfriend STM 전파 옵션을 포함한 확장된 PursuitEvasionEnv.
-    기존 RL 트레이너와 호환되도록 수정되었습니다.
     """
     
     def __init__(self, config=None, use_gastm: bool = True):
@@ -24,17 +24,12 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
 
         Args:
             config: 환경 설정 객체
-            use_gastm (bool): True이면 GA STM을, False이면 수치 적분을 사용합니다.
+            use_gastm: True이면 GA STM을, False이면 수치 적분을 사용합니다.
         """
         super().__init__(config)
         
         self.use_gastm = use_gastm
         self.gastm_propagator = None
-        
-        if self.use_gastm:
-            print("INFO: Gim-Alfriend STM 전파기를 사용합니다.")
-        else:
-            print("INFO: 비선형 동역학 수치 적분기를 사용합니다.")
 
     def reset(self) -> np.ndarray:
         """환경을 리셋하고, 필요 시 GASTMPropagator를 재초기화합니다."""
@@ -51,13 +46,9 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
 
     def _simulate_relative_motion(self):
         """상대 운동 시뮬레이션 (모드에 따라 다른 방법 사용)"""
-        if self.use_gastm:
-            # GASTMPropagator를 사용하여 상태 전파
-            if self.gastm_propagator:
-                self.state = self.gastm_propagator.propagate(self.dt)
-            else:
-                # 안전 장치: Propagator가 초기화되지 않은 경우
-                super()._simulate_relative_motion()
+        if self.use_gastm and self.gastm_propagator:
+            # GASTMPropagator를 사용하여 상태 전파 (현재 시간 전달)
+            self.state = self.gastm_propagator.propagate(self.dt, self.t)
         else:
             # 기존의 비선형 동역학 수치 적분 사용
             super()._simulate_relative_motion()
@@ -72,12 +63,12 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         # STM 모드일 경우, 변경된 궤도를 기준으로 전파기를 재초기화
         if self.use_gastm and self.gastm_propagator:
             self.gastm_propagator.reinitialize_with_new_chief_orbit(
-                self.evader_orbit, self.state
+                self.evader_orbit, self.state, self.t
             )
 
     def step(self, normalized_action_e: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
         """
-        환경 스텝 실행 (기존 PEgame과 동일한 인터페이스)
+        환경 스텝 실행
         """
         # 1. 회피자(Evader) 액션 처리
         action_e = self._denormalize_action(normalized_action_e)
@@ -100,15 +91,17 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         if self.use_gastm and self.gastm_propagator:
             # STM 모드: 추격자 제어 적용 후 전파
             if np.any(delta_v_p):
-                self.state = self.gastm_propagator.apply_pursuer_control(delta_v_p, self.dt)
+                self.state = self.gastm_propagator.apply_pursuer_control(
+                    delta_v_p, self.dt, self.t
+                )
             else:
-                self.state = self.gastm_propagator.propagate(self.dt)
+                self.state = self.gastm_propagator.propagate(self.dt, self.t)
         else:
             # 비선형 모드: 추격자 제어 적용 후 전파
             self.state[3:] += delta_v_p
             self._simulate_relative_motion()
 
-        # 4. 시간 및 스텝 업데이트
+        # 4. 시간 및 스텝 업데이트 (한 번만!)
         self.t += self.dt
         self.step_count += 1
         
@@ -233,81 +226,6 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         }
 
 
-# 시각화 함수 (환경 클래스 외부)
-def visualize_comparison_results(results: Dict):
-    """
-    GA STM과 비선형 동역학 비교 결과를 시각화합니다.
-    
-    Args:
-        results: compare_propagation_methods()의 결과 딕셔너리
-    """
-    import matplotlib.pyplot as plt
-    
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    
-    # 시간을 분 단위로 변환
-    time_min = results['time'] / 60
-    
-    # X-Y 평면 궤적
-    ax = axes[0, 0]
-    ax.plot(results['nonlinear_states'][:, 0]/1000, 
-            results['nonlinear_states'][:, 1]/1000, 
-            'b-', label='Nonlinear', linewidth=2)
-    ax.plot(results['gastm_states'][:, 0]/1000, 
-            results['gastm_states'][:, 1]/1000, 
-            'r--', label='GA STM', linewidth=2)
-    ax.set_xlabel('Radial (km)')
-    ax.set_ylabel('Along-track (km)')
-    ax.set_title('Relative Trajectory (X-Y Plane)')
-    ax.legend()
-    ax.grid(True)
-    ax.axis('equal')
-    
-    # 상대 거리
-    ax = axes[0, 1]
-    nl_dist = np.linalg.norm(results['nonlinear_states'][:, :3], axis=1)
-    ga_dist = np.linalg.norm(results['gastm_states'][:, :3], axis=1)
-    ax.plot(time_min, nl_dist/1000, 'b-', label='Nonlinear', linewidth=2)
-    ax.plot(time_min, ga_dist/1000, 'r--', label='GA STM', linewidth=2)
-    ax.set_xlabel('Time (min)')
-    ax.set_ylabel('Relative Distance (km)')
-    ax.set_title('Separation Distance')
-    ax.legend()
-    ax.grid(True)
-    
-    # 위치 오차
-    ax = axes[1, 0]
-    ax.semilogy(time_min, results['position_errors'], 'g-', linewidth=2)
-    ax.set_xlabel('Time (min)')
-    ax.set_ylabel('Position Error (m)')
-    ax.set_title('Position Error: |Nonlinear - GA STM|')
-    ax.grid(True)
-    
-    # 속도 오차
-    ax = axes[1, 1]
-    ax.semilogy(time_min, results['velocity_errors'], 'm-', linewidth=2)
-    ax.set_xlabel('Time (min)')
-    ax.set_ylabel('Velocity Error (m/s)')
-    ax.set_title('Velocity Error: |Nonlinear - GA STM|')
-    ax.grid(True)
-    
-    plt.tight_layout()
-    
-    # 요약 통계 출력
-    print("\n=== GA STM vs Nonlinear Dynamics Comparison ===")
-    print(f"시뮬레이션 시간: {results['time'][-1]/60:.1f} 분")
-    print(f"\n위치 오차:")
-    print(f"  최대: {results['max_position_error']:.2f} m")
-    print(f"  평균: {results['mean_position_error']:.2f} m")
-    print(f"  최종: {results['final_position_error']:.2f} m")
-    print(f"\n속도 오차:")
-    print(f"  최대: {results['max_velocity_error']:.4f} m/s")
-    print(f"  평균: {results['mean_velocity_error']:.4f} m/s")
-    print(f"  최종: {results['final_velocity_error']:.4f} m/s")
-    
-    return fig
-
-
 # 사용 예시
 if __name__ == "__main__":
     from config.settings import get_config
@@ -337,11 +255,8 @@ if __name__ == "__main__":
     env.reset()
     results = env.compare_propagation_methods(test_duration=600.0)  # 10분
     
-    # 결과 시각화
-    try:
-        import matplotlib.pyplot as plt
-        fig = visualize_comparison_results(results)
-        plt.savefig('gastm_nonlinear_comparison.png', dpi=150)
-        plt.show()
-    except ImportError:
-        print("matplotlib가 설치되지 않아 시각화를 건너뜁니다.")
+    # 결과 출력
+    print(f"\n위치 오차:")
+    print(f"  최대: {results['max_position_error']:.2f} m")
+    print(f"  평균: {results['mean_position_error']:.2f} m")
+    print(f"  최종: {results['final_position_error']:.2f} m")
