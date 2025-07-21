@@ -46,6 +46,7 @@ class EnvironmentConfig:
     max_delta_v_budget: float = ENV_PARAMS["max_delta_v_budget"]
     max_initial_separation: float = ENV_PARAMS["max_initial_separation"]
     use_rk4: bool = ENV_PARAMS["use_rk4"]
+    use_gastm: bool = ENV_PARAMS["use_gastm"]
 
     # 버퍼 설정
     capture_buffer_steps: int = BUFFER_PARAMS["capture_buffer_steps"]

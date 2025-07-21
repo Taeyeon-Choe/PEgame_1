@@ -16,6 +16,7 @@ if not os.environ.get('DEBUG'):
 # 프로젝트 모듈 임포트
 from config.settings import get_config, ProjectConfig
 from environment.pursuit_evasion_env import PursuitEvasionEnv
+from environment.pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
 from training.trainer import SACTrainer, create_trainer
 from training.nash_equilibrium import NashEquilibriumTrainer, train_nash_equilibrium_model
 from analysis.evaluator import ModelEvaluator, create_evaluator
@@ -35,7 +36,10 @@ def setup_environment(config: ProjectConfig) -> PursuitEvasionEnv:
     else:
         print("CPU 모드로 실행")
     
-    env = PursuitEvasionEnv(config)
+    if config.environment.use_gastm:
+        env = PursuitEvasionEnvGASTM(config)
+    else:
+        env = PursuitEvasionEnv(config)
     print(f"환경 초기화 완료")
     print(f"  - 관측 공간: {env.observation_space}")
     print(f"  - 액션 공간: {env.action_space}")
@@ -48,6 +52,8 @@ def create_parallel_env(config: ProjectConfig):
     n_envs = config.training.n_envs
     
     def make_env():
+        if config.environment.use_gastm:
+            return PursuitEvasionEnvGASTM(config)
         return PursuitEvasionEnv(config)
     
     # Windows에서는 DummyVecEnv 사용

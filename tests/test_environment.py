@@ -6,6 +6,7 @@
 import pytest
 import numpy as np
 from environment.pursuit_evasion_env import PursuitEvasionEnv
+from environment.pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
 from config.settings import get_config
 
 
@@ -82,3 +83,12 @@ class TestPursuitEvasionEnv:
         # 포획 상황에서는 버퍼 시간이 필요하므로 즉시 종료되지 않을 수 있음
         # 단지 시스템이 크래시하지 않는지만 확인
         assert not np.isnan(obs).any()
+
+    def test_gastm_environment_creation(self):
+        """GA STM 환경 생성 테스트"""
+        config = get_config(debug_mode=True)
+        config.environment.use_gastm = True
+        env = PursuitEvasionEnvGASTM(config)
+        obs = env.reset()
+        assert obs.shape == (9,)
+        env.close()
