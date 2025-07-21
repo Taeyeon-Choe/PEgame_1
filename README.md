@@ -136,6 +136,19 @@ for _ in range(100):
 5 km 이내 위치가 되도록 궤도 요소를 선택하므로, 매번 다른 초기 조건으로 학습을
 진행할 수 있습니다.
 
+#### Gim-Alfriend STM 환경 사용
+
+기본 환경 대신 Gim-Alfriend STM(State Transition Matrix)을 활용하여
+상대 궤도를 빠르게 전파할 수 있습니다.
+
+```python
+from environment.pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
+
+env = PursuitEvasionEnvGASTM(config, use_gastm=True)
+```
+
+`use_gastm=False`로 설정하면 기존 비선형 수치 적분 방식으로 동작합니다.
+
 ### 2단계: 기본 SAC 학습
 
 #### 단일 환경 학습 (테스트용)
