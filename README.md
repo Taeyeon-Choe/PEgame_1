@@ -355,6 +355,11 @@ config.environment.use_rk4 = True
 config.environment.dt = 15.0  # 더 작은 시간 간격
 ```
 
+3. **GA STM 전파기 사용**
+```python
+config.environment.use_gastm = True
+```
+
 ## Docker 사용법
 
 ### 빌드 및 실행

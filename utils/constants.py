@@ -36,6 +36,7 @@ ENV_PARAMS = {
     "max_delta_v_budget": 300.0,  # 최대 추진제 예산 (m/s)
     "max_initial_separation": 5e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
+    "use_gastm": False,
 }
 
 # 버퍼 시간 설정
