@@ -314,7 +314,7 @@ if __name__ == "__main__":
     
     # 설정 로드
     config = get_config()
-    config['dt'] = 10.0  # 10초 시간 간격
+    config.environment.dt = 10.0  # 10초 시간 간격
     
     # GA STM 사용 환경 생성
     print("GA STM 환경 생성 중...")
