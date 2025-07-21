@@ -172,33 +172,56 @@ class ChiefOrbit:
         return ChiefOrbit(self.a, self.e, self.i, self.RAAN, self.omega, self.M0, self.mu)
 
     def apply_impulse(self, delta_v_lvlh: np.ndarray, t: float):
-        """LVLH 좌표계 기준의 delta-v를 궤도에 적용합니다."""
+        """
+        LVLH 좌표계 기준의 delta-v를 궤도에 적용합니다.
+        
+        Args:
+            delta_v_lvlh: LVLH 좌표계에서의 속도 변화량 [vx, vy, vz]
+            t: 임펄스가 적용되는 시간
+        """
         if not np.any(delta_v_lvlh):
             return
         
+        # 현재 시간에서의 위치와 속도
         r_eci, v_eci = self.get_position_velocity(t)
+        
+        # 각운동량 계산
         h_vec = np.cross(r_eci, v_eci)
-        h_norm, r_norm = np.linalg.norm(h_vec), np.linalg.norm(r_eci)
-
+        h_norm = np.linalg.norm(h_vec)
+        r_norm = np.linalg.norm(r_eci)
+    
         if h_norm < 1e-10 or r_norm < 1e-10:
             print(f"WARNING: 작은 각운동량 또는 위치 노름 감지: h_norm={h_norm}, r_norm={r_norm}")
             return
-            
-        x_lvlh, z_lvlh = r_eci / r_norm, h_vec / h_norm
+        
+        # LVLH to ECI 변환 행렬
+        x_lvlh = r_eci / r_norm
+        z_lvlh = h_vec / h_norm
         y_lvlh = np.cross(z_lvlh, x_lvlh)
+        y_lvlh = y_lvlh / np.linalg.norm(y_lvlh)
+        
         R_lvlh_to_eci = np.vstack((x_lvlh, y_lvlh, z_lvlh)).T
+        
+        # Delta-v를 ECI 좌표계로 변환
         delta_v_eci = R_lvlh_to_eci @ delta_v_lvlh
+        
+        # 새로운 속도
         v_eci_new = v_eci + delta_v_eci
         
+        # 새로운 궤도 요소 계산
         new_elements = state_to_orbital_elements(r_eci, v_eci_new, self.mu)
         
+        # 궤도 요소 업데이트
         self.a, self.e, self.i, self.RAAN, self.omega, self.M0 = new_elements
+        
+        # 평균 운동과 주기 재계산
         self.n = np.sqrt(self.mu / self.a**3)
         self.period = 2 * np.pi / self.n
         
-        # <<< 매우 중요한 수정: 상태 캐시 초기화 >>>
+        # 상태 캐시 초기화
         self._state_cache.clear()
-
+        
+        # 안정성 검사
         if self.e >= 1.0 or self.a <= 0:
             print(f"WARNING: 궤도가 불안정해졌습니다 (e={self.e}, a={self.a})")
 
