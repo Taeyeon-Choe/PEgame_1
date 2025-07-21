@@ -106,7 +106,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         self.step_count += 1
         
         # 5. 종료 조건 및 보상 계산
-        done, termination_info = self.check_termination_conditions()
+        done, termination_info = self.check_orbital_period_termination()
         evader_reward, pursuer_reward, info = self._calculate_rewards(
             done, termination_info, delta_v_e_mag
         )
