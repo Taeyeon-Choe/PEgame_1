@@ -7,6 +7,7 @@ import numpy as np
 from typing import Dict, Tuple, Optional
 from environment.pursuit_evasion_env import PursuitEvasionEnv
 from orbital_mechanics.ga_stm_propagator import GASTMPropagator
+from orbital_mechanics.orbit import ChiefOrbit
 from scipy.integrate import solve_ivp
 from orbital_mechanics.dynamics import relative_dynamics_evader_centered
 
@@ -147,9 +148,9 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         Returns:
             비교 결과 딕셔너리
         """
-        # 초기 상태 저장
+        # 초기 상태와 궤도 요소 저장
         initial_state = self.state.copy()
-        initial_evader_state = self.evader_orbit.get_state(self.t)
+        initial_orbit_elements = self.evader_orbit.get_orbital_elements()
         initial_time = self.t
         initial_step = self.step_count
         
@@ -175,9 +176,17 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
             obs, _, _, _ = self.step(control_sequence[i])
             nonlinear_states.append(self.state.copy())
         
-        # 초기 상태로 리셋
+        # 초기 상태와 궤도 요소로 복원
         self.state = initial_state.copy()
-        self.evader_orbit.set_state(initial_evader_state)
+        self.evader_orbit = ChiefOrbit(
+            a=initial_orbit_elements["a"],
+            e=initial_orbit_elements["e"],
+            i=initial_orbit_elements["i"],
+            RAAN=initial_orbit_elements["RAAN"],
+            omega=initial_orbit_elements["omega"],
+            M0=initial_orbit_elements["M0"],
+            mu=self.evader_orbit.mu,
+        )
         self.t = initial_time
         self.step_count = initial_step
         
