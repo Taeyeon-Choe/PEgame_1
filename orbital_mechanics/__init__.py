@@ -4,6 +4,8 @@
 """
 
 from .orbit import ChiefOrbit
+from .ga_stm_propagator import GASTMPropagator
+from .GimAlfriendSTM import GimAlfriendSTM
 from .dynamics import (
     relative_dynamics_evader_centered,
     compute_j2_differential_acceleration,
@@ -40,5 +42,7 @@ __all__ = [
     'lvlh_to_eci',
     'convert_orbital_elements_to_relative_state',
     'roe_to_cartesian',
-    'cartesian_to_roe'
+    'cartesian_to_roe',
+    'GASTMPropagator',
+    'GimAlfriendSTM'
 ]

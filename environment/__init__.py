@@ -4,8 +4,10 @@
 """
 
 from .pursuit_evasion_env import PursuitEvasionEnv
+from .pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
 
 __all__ = [
-    'PursuitEvasionEnv'
+    'PursuitEvasionEnv',
+    'PursuitEvasionEnvGASTM'
 ]
 
