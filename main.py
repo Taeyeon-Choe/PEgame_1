@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 위성 추격-회피 게임 메인 실행 스크립트
 """
@@ -138,11 +139,32 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
     # 결과 출력
     summary = results['summary']
     print(f"\n평가 결과 요약:")
-    print(f"  성공률: {summary['success_rate']:.1f}%")
-    print(f"  평균 최종 거리: {summary['avg_final_distance']:.2f} m")
-    print(f"  평균 회피자 delta-v: {summary['avg_evader_delta_v']:.2f} m/s")
-    print(f"  평균 Nash 메트릭: {summary['avg_nash_metric']:.4f}")
-    print(f"  Zero-Sum 검증: {summary['zero_sum_verification']:.6f}")
+    print(f"  성공률: {summary.get('success_rate', 0):.1f}%")
+    
+    # avg_final_distance 키 확인 후 출력
+    if 'avg_final_distance' in summary:
+        print(f"  평균 최종 거리: {summary['avg_final_distance']:.2f} m")
+    else:
+        # 대체 키 확인
+        for key in ['average_final_distance', 'mean_final_distance', 'final_distance']:
+            if key in summary:
+                print(f"  평균 최종 거리: {summary[key]:.2f} m")
+                break
+        else:
+            # 개별 결과에서 직접 계산
+            if 'individual_results' in results:
+                distances = [r.get('final_distance_m', 0) for r in results['individual_results']]
+                if distances:
+                    avg_distance = sum(distances) / len(distances)
+                    print(f"  평균 최종 거리: {avg_distance:.2f} m")
+                else:
+                    print(f"  평균 최종 거리: 데이터 없음")
+            else:
+                print(f"  평균 최종 거리: 계산 불가")
+    
+    print(f"  평균 회피자 delta-v: {summary.get('avg_evader_delta_v', 0):.2f} m/s")
+    print(f"  평균 Nash 메트릭: {summary.get('avg_nash_metric', 0):.4f}")
+    print(f"  Zero-Sum 검증: {summary.get('zero_sum_verification', 0):.6f}")
     
     env.close()
     return evaluator
@@ -167,9 +189,9 @@ def run_demonstration(model_path: str, config: ProjectConfig):
     
     metrics = demo_result['metrics']
     print(f"\n데모 결과:")
-    print(f"  최종 거리: {metrics['final_distance_m']:.2f} m")
-    print(f"  회피자 총 delta-v: {metrics['evader_total_delta_v_ms']:.2f} m/s")
-    print(f"  성공 여부: {'성공' if metrics['success'] else '실패'}")
+    print(f"  최종 거리: {metrics.get('final_distance_m', 0):.2f} m")
+    print(f"  회피자 총 delta-v: {metrics.get('evader_total_delta_v_ms', 0):.2f} m/s")
+    print(f"  성공 여부: {'성공' if metrics.get('success', False) else '실패'}")
     
     env.close()
     return demo_result
@@ -257,6 +279,9 @@ def main():
   
   # GPU 사용 강제
   python main.py --mode train_standard --gpu
+  
+  # 환경 변수 조정 예시
+  python main.py --mode train_standard --use-gastm --c 0.01 --max-steps 800
         """
     )
     
@@ -288,6 +313,22 @@ def main():
                        help='CPU 사용 강제')
     parser.add_argument('--n-envs', type=int, default=None,
                        help='병렬 환경 수')
+    parser.add_argument('--save-freq', type=int, default=None,
+                       help='모델 저장 주기')
+    
+    # 환경 변수 관련 인자 추가
+    parser.add_argument('--use-gastm', action='store_true',
+                       help='GA-STM 사용')
+    parser.add_argument('--c', type=float, default=None,
+                       help='c 파라미터 (기본값: 0.001)')
+    parser.add_argument('--max-steps', type=int, default=None,
+                       help='에피소드 최대 스텝 수')
+    parser.add_argument('--max-delta-v-budget', type=float, default=None,
+                       help='최대 Delta-V 예산 (m/s)')
+    parser.add_argument('--delta-v-emax', type=float, default=None,
+                       help='회피자 최대 Delta-V (m/s)')
+    parser.add_argument('--delta-v-pmax', type=float, default=None,
+                       help='추격자 최대 Delta-V (m/s)')
     
     args = parser.parse_args()
     
@@ -310,6 +351,11 @@ def main():
         if args.n_envs:
             custom_config['training'] = custom_config.get('training', {})
             custom_config['training']['n_envs'] = args.n_envs
+            
+        # 저장 주기 설정
+        if args.save_freq:
+            custom_config['training'] = custom_config.get('training', {})
+            custom_config['training']['save_freq'] = args.save_freq
         
         # GPU/CPU 설정
         if args.gpu:
@@ -318,6 +364,31 @@ def main():
         elif args.cpu:
             custom_config['training'] = custom_config.get('training', {})
             custom_config['training']['use_gpu'] = False
+        
+        # 환경 변수 설정
+        if args.use_gastm:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['use_gastm'] = True
+        
+        if args.c is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['c'] = args.c
+            
+        if args.max_steps is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['max_steps'] = args.max_steps
+            
+        if args.max_delta_v_budget is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['max_delta_v_budget'] = args.max_delta_v_budget
+            
+        if args.delta_v_emax is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['delta_v_emax'] = args.delta_v_emax
+            
+        if args.delta_v_pmax is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['delta_v_pmax'] = args.delta_v_pmax
         
         config = get_config(
             experiment_name=args.experiment_name or f"{args.mode}_experiment",
@@ -331,9 +402,19 @@ def main():
     print(f"실험 이름: {config.experiment_name}")
     print(f"GPU 사용: {config.training.use_gpu}")
     print(f"디버그 모드: {config.debug_mode}")
+    print(f"GA-STM 사용: {config.environment.use_gastm}")
+    
     if args.mode.startswith('train'):
         print(f"학습 스텝: {config.training.total_timesteps:,}")
         print(f"병렬 환경 수: {config.training.n_envs}")
+        print(f"저장 주기: {config.training.save_freq}")
+        
+    print(f"\n환경 설정:")
+    print(f"  c 파라미터: {config.environment.c}")
+    print(f"  최대 스텝: {config.environment.max_steps}")
+    print(f"  최대 Delta-V 예산: {config.environment.max_delta_v_budget} m/s")
+    print(f"  회피자 최대 Delta-V: {config.environment.delta_v_emax} m/s")
+    print(f"  추격자 최대 Delta-V: {config.environment.delta_v_pmax} m/s")
     
     try:
         # 모드별 실행
