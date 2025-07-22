@@ -198,7 +198,7 @@ def run_demonstration(model_path: str, config: ProjectConfig):
 
 
 def interactive_mode():
-    """대화형 모드"""
+    """대화형 모드 - GA-STM 옵션 추가 버전"""
     print("\n=== 위성 추격-회피 게임 대화형 모드 ===")
     print("\n사용 가능한 명령:")
     print("1. train - 새 모델 학습")
@@ -211,13 +211,59 @@ def interactive_mode():
         choice = input("\n명령을 선택하세요 (1-5): ").strip()
         
         if choice == '1' or choice == 'train':
+            print("\n=== 학습 설정 ===")
+            
+            # 타임스텝 설정
             timesteps = input("학습 스텝 수 (기본값: 50000): ").strip()
             timesteps = int(timesteps) if timesteps else 50000
             
+            # GA-STM 사용 여부
+            use_gastm = input("GA-STM 사용? (y/n, 기본값: n): ").strip().lower()
+            use_gastm = use_gastm == 'y'
+            
+            # 고급 설정 여부
+            advanced = input("고급 설정을 하시겠습니까? (y/n, 기본값: n): ").strip().lower()
+            
             config = get_config(experiment_name="interactive_training")
             config.training.total_timesteps = timesteps
+            config.environment.use_gastm = use_gastm
             
-            train_standard_model(config)
+            if advanced == 'y':
+                # c 파라미터
+                c_value = input(f"c 파라미터 (기본값: {config.environment.c}): ").strip()
+                if c_value:
+                    config.environment.c = float(c_value)
+                
+                # 최대 스텝
+                max_steps = input(f"최대 스텝 수 (기본값: {config.environment.max_steps}): ").strip()
+                if max_steps:
+                    config.environment.max_steps = int(max_steps)
+                
+                # Delta-V 설정
+                delta_v_emax = input(f"회피자 최대 Delta-V (기본값: {config.environment.delta_v_emax} m/s): ").strip()
+                if delta_v_emax:
+                    config.environment.delta_v_emax = float(delta_v_emax)
+                
+                delta_v_pmax = input(f"추격자 최대 Delta-V (기본값: {config.environment.delta_v_pmax} m/s): ").strip()
+                if delta_v_pmax:
+                    config.environment.delta_v_pmax = float(delta_v_pmax)
+                
+                # 병렬 환경 수
+                n_envs = input(f"병렬 환경 수 (기본값: {config.training.n_envs}): ").strip()
+                if n_envs:
+                    config.training.n_envs = int(n_envs)
+            
+            print(f"\n학습 설정:")
+            print(f"  - 타임스텝: {config.training.total_timesteps:,}")
+            print(f"  - GA-STM 사용: {config.environment.use_gastm}")
+            print(f"  - c 파라미터: {config.environment.c}")
+            print(f"  - 병렬 환경: {config.training.n_envs}")
+            
+            confirm = input("\n이 설정으로 학습을 시작하시겠습니까? (y/n): ").strip().lower()
+            if confirm == 'y':
+                train_standard_model(config)
+            else:
+                print("학습이 취소되었습니다.")
             
         elif choice == '2' or choice == 'evaluate':
             model_path = input("모델 경로 (기본값: models/standard_sac_final.zip): ").strip()
@@ -230,7 +276,12 @@ def interactive_mode():
             n_tests = input("테스트 수 (기본값: 10): ").strip()
             n_tests = int(n_tests) if n_tests else 10
             
+            # 평가 시에도 GA-STM 옵션 제공
+            use_gastm = input("평가 시 GA-STM 사용? (y/n, 기본값: n): ").strip().lower()
+            
             config = get_config(experiment_name="interactive_evaluation")
+            config.environment.use_gastm = use_gastm == 'y'
+            
             evaluate_model(model_path, config, n_tests)
             
         elif choice == '3' or choice == 'demo':
@@ -246,9 +297,16 @@ def interactive_mode():
             
         elif choice == '4' or choice == 'quick':
             print("\n빠른 테스트 실행 중...")
+            
+            # 빠른 테스트에서도 GA-STM 옵션
+            use_gastm = input("GA-STM으로 테스트? (y/n, 기본값: n): ").strip().lower()
+            
             config = get_config(experiment_name="quick_test", debug_mode=True)
             config.training.total_timesteps = 5000
             config.training.n_envs = 2
+            config.environment.use_gastm = use_gastm == 'y'
+            
+            print(f"GA-STM {'사용' if config.environment.use_gastm else '미사용'}으로 테스트 시작...")
             train_standard_model(config)
             
         elif choice == '5' or choice == 'exit':
