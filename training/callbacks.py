@@ -356,23 +356,119 @@ class EvasionTrackingCallback(BaseCallback):
 
 
 class PerformanceCallback(BaseCallback):
-    """성능 모니터링 콜백 - 벡터 환경 지원"""
+    """성능 추적 및 시각화 콜백"""
     
-    def __init__(self, eval_freq=1000, verbose=0):
+    def __init__(self, log_dir: str, plot_freq: int = 100, verbose: int = 0):
         super().__init__(verbose)
-        self.eval_freq = eval_freq
-        self.fps_history = []
-        self.loss_history = []
+        self.log_dir = log_dir
+        self.plot_freq = plot_freq
+        self.plot_dir = f"{log_dir}/plots"
         
-    def _on_step(self):
-        if self.n_calls % self.eval_freq == 0:
-            # FPS 계산
-            if hasattr(self.model, 'logger') and self.model.logger is not None:
-                if 'time/fps' in self.model.logger.name_to_value:
-                    fps = self.model.logger.name_to_value['time/fps']
-                    self.fps_history.append(fps)
-                    
+        # 디렉토리 생성
+        os.makedirs(self.plot_dir, exist_ok=True)
+        
+        # 추적 데이터
+        self.episode_rewards = []
+        self.episode_lengths = []
+        self.success_rates = []
+        self.outcome_counts = []
+        self.evader_rewards = []
+        self.pursuer_rewards = []
+        self.nash_metrics = []
+        self.buffer_times = []
+        self.episode_count = 0
+        
+        # 윈도우 사이즈
+        self.window_size = 100
+        
+    def _on_step(self) -> bool:
+        # 에피소드 종료 시
+        if self.locals.get("dones", [False])[0]:
+            self.episode_count += 1
+            
+            # 정보 추출
+            info = self.locals.get("infos", [{}])[0]
+            
+            # 보상 저장
+            episode_reward = info.get("episode", {}).get("r", 0)
+            self.episode_rewards.append(episode_reward)
+            
+            # 성공 여부
+            success = info.get("success", False)
+            
+            # 성공률 계산 (이동 평균)
+            recent_successes = [1 if info.get("success", False) else 0]
+            if len(self.success_rates) > 0:
+                # 최근 100개 에피소드의 성공률
+                window_start = max(0, len(self.episode_rewards) - self.window_size)
+                window_rewards = self.episode_rewards[window_start:]
+                window_success_count = sum(1 for r in window_rewards if r > 0)  # 보상이 양수면 성공으로 간주
+                success_rate = window_success_count / len(window_rewards)
+            else:
+                success_rate = 1.0 if success else 0.0
+                
+            self.success_rates.append(success_rate)
+            
+            # 기타 메트릭
+            self.evader_rewards.append(info.get("evader_reward", episode_reward))
+            self.pursuer_rewards.append(info.get("pursuer_reward", -episode_reward))
+            self.nash_metrics.append(info.get("nash_metric", 0))
+            self.buffer_times.append(info.get("buffer_time", 0))
+            
+            # Verbose 출력
+            if self.verbose > 0 and self.episode_count % 10 == 0:
+                print(f"\n에피소드 {self.episode_count}:")
+                print(f"  보상: {episode_reward:.2f}")
+                print(f"  성공률: {success_rate:.1%}")
+                print(f"  Nash 메트릭: {self.nash_metrics[-1]:.3f}")
+                print(f"  타임스텝: {self.num_timesteps}")
+            
+            # 주기적으로 플롯 저장
+            if self.episode_count % self.plot_freq == 0:
+                self._save_plots()
+                
         return True
+    
+    def _save_plots(self):
+        """플롯 저장"""
+        try:
+            plot_training_progress(
+                success_rates=self.success_rates,
+                outcome_counts=self.outcome_counts,
+                evader_rewards=self.evader_rewards,
+                pursuer_rewards=self.pursuer_rewards,
+                nash_metrics=self.nash_metrics,
+                buffer_times=self.buffer_times,
+                episode_count=self.episode_count,
+                save_dir=self.plot_dir
+            )
+            
+            if self.verbose > 0:
+                print(f"플롯 저장 완료: {self.plot_dir}")
+                
+        except Exception as e:
+            print(f"플롯 저장 중 오류 발생: {e}")
+    
+    def save_final_stats(self):
+        """최종 통계 저장"""
+        stats = {
+            "episodes_completed": self.episode_count,
+            "final_success_rate": self.success_rates[-1] if self.success_rates else 0,
+            "average_reward": np.mean(self.episode_rewards) if self.episode_rewards else 0,
+            "final_nash_metric": self.nash_metrics[-1] if self.nash_metrics else 0,
+        }
+        
+        # JSON으로 저장
+        import json
+        stats_path = f"{self.log_dir}/training_stats.json"
+        with open(stats_path, 'w') as f:
+            json.dump(stats, f, indent=2)
+            
+        # 최종 플롯 저장
+        self._save_plots()
+        
+        if self.verbose > 0:
+            print(f"최종 통계 저장: {stats_path}")
 
 
 class ModelSaveCallback(BaseCallback):
