@@ -578,6 +578,20 @@ def plot_orbital_elements_comparison(evader_elements: Dict, pursuer_elements: Di
         plt.savefig(f"{save_path}_orbital_elements.png", dpi=PLOT_PARAMS['dpi'])
     plt.close()
 
+def numpy_to_python(obj):
+    """NumPy 타입을 Python 기본 타입으로 변환"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: numpy_to_python(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [numpy_to_python(item) for item in obj]
+    else:
+        return obj
 
 def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
                            save_dir: str):
@@ -654,21 +668,33 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
     # 대시보드 데이터 저장
     dashboard_data = {
         'training_stats': {
-            'episodes_completed': training_stats.get('episodes_completed', 0),
-            'final_success_rate': training_stats.get('success_rates', [0])[-1] if 'success_rates' in training_stats and training_stats['success_rates'] else 0,
-            'final_nash_metric': training_stats.get('nash_metrics', [0])[-1] if 'nash_metrics' in training_stats and training_stats['nash_metrics'] else 0,
+            'episodes_completed': int(training_stats.get('episodes_completed', 0)),
+            'final_success_rate': float(training_stats.get('success_rates', [0])[-1]) if 'success_rates' in training_stats and training_stats['success_rates'] else 0,
+            'final_nash_metric': float(training_stats.get('nash_metrics', [0])[-1]) if 'nash_metrics' in training_stats and training_stats['nash_metrics'] else 0,
         },
         'test_stats': {
-            'total_tests': len(test_results) if test_results else 0,
-            'success_count': success_count if test_results else 0,
-            'success_rate': success_count/len(test_results) if test_results else 0,
-            'avg_delta_v': np.mean(delta_vs) if test_results else 0,
-            'avg_distance': np.mean(distances) if test_results else 0,
+            'total_tests': int(len(test_results)) if test_results else 0,
+            'success_count': int(success_count) if test_results else 0,
+            'success_rate': float(success_count/len(test_results)) if test_results else 0,
+            'avg_delta_v': float(np.mean(delta_vs)) if test_results and delta_vs else 0,
+            'avg_distance': float(np.mean(distances)) if test_results and distances else 0,
         }
     }
     
-    with open(f"{save_dir}/dashboard_summary.json", 'w') as f:
-        json.dump(dashboard_data, f, indent=2)
+    # NumPy 타입을 Python 타입으로 변환
+    dashboard_data = numpy_to_python(dashboard_data)
+    
+    try:
+        with open(f"{save_dir}/dashboard_summary.json", 'w') as f:
+            json.dump(dashboard_data, f, indent=2)
+    except TypeError as e:
+        print(f"JSON 저장 오류: {e}")
+        # 문제가 있는 데이터 타입 출력
+        for key, value in dashboard_data.items():
+            print(f"{key}: {type(value)}")
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    print(f"  {k}: {type(v)}")
 
 
 # 모듈 초기화 시 matplotlib 설정
