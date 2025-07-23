@@ -578,6 +578,50 @@ def plot_orbital_elements_comparison(evader_elements: Dict, pursuer_elements: Di
         plt.savefig(f"{save_path}_orbital_elements.png", dpi=PLOT_PARAMS['dpi'])
     plt.close()
 
+
+def plot_eci_trajectories(times: np.ndarray,
+                          pursuer_states: np.ndarray,
+                          evader_states: np.ndarray,
+                          save_path: Optional[str] = None,
+                          title: str = "ECI Trajectories"):
+    """ECI 프레임 궤적 시각화"""
+    setup_matplotlib()
+
+    fig = plt.figure(figsize=PLOT_PARAMS['figure_size_3d'])
+    ax = fig.add_subplot(111, projection='3d')
+
+    ax.plot(evader_states[:, 0], evader_states[:, 1], evader_states[:, 2],
+            color=PLOT_PARAMS['colors']['evader'], label='Evader')
+    ax.plot(pursuer_states[:, 0], pursuer_states[:, 1], pursuer_states[:, 2],
+            color=PLOT_PARAMS['colors']['pursuer'], label='Pursuer')
+
+    ax.set_xlabel('x (m)')
+    ax.set_ylabel('y (m)')
+    ax.set_zlabel('z (m)')
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    combined = np.vstack((evader_states[:, :3], pursuer_states[:, :3]))
+    max_range = np.max(np.abs(combined))
+    ax.set_xlim(-max_range, max_range)
+    ax.set_ylim(-max_range, max_range)
+    ax.set_zlim(-max_range, max_range)
+
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(f"{save_path}_eci.png", dpi=PLOT_PARAMS['dpi'])
+        ephemeris_data = {
+            't': times.tolist(),
+            'evader': evader_states.tolist(),
+            'pursuer': pursuer_states.tolist()
+        }
+        with open(f"{save_path}_eci.json", 'w') as f:
+            json.dump(ephemeris_data, f, indent=2)
+
+    plt.close()
+
 def numpy_to_python(obj):
     """NumPy 타입을 Python 기본 타입으로 변환"""
     if isinstance(obj, np.integer):
