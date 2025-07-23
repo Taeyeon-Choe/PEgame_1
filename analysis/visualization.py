@@ -583,35 +583,79 @@ def plot_eci_trajectories(times: np.ndarray,
                           pursuer_states: np.ndarray,
                           evader_states: np.ndarray,
                           save_path: Optional[str] = None,
-                          title: str = "ECI Trajectories"):
+                          title: str = "ECI Trajectories",
+                          show_earth: bool = True, 
+                          show_stats: bool = True):
     """ECI 프레임 궤적 시각화"""
     setup_matplotlib()
-
     fig = plt.figure(figsize=PLOT_PARAMS['figure_size_3d'])
     ax = fig.add_subplot(111, projection='3d')
-
+    
+    # 궤적 플롯
     ax.plot(evader_states[:, 0], evader_states[:, 1], evader_states[:, 2],
-            color=PLOT_PARAMS['colors']['evader'], label='Evader')
+            color=PLOT_PARAMS['colors']['evader'], label='Evader', linewidth=2)
     ax.plot(pursuer_states[:, 0], pursuer_states[:, 1], pursuer_states[:, 2],
-            color=PLOT_PARAMS['colors']['pursuer'], label='Pursuer')
-
-    ax.set_xlabel('x (m)')
-    ax.set_ylabel('y (m)')
-    ax.set_zlabel('z (m)')
+            color=PLOT_PARAMS['colors']['pursuer'], label='Pursuer', linewidth=2)
+    
+    # 시작점과 끝점 표시
+    ax.scatter(evader_states[0, 0], evader_states[0, 1], evader_states[0, 2], 
+               c='green', s=100, marker='o', label='Start')
+    ax.scatter(evader_states[-1, 0], evader_states[-1, 1], evader_states[-1, 2], 
+               c='red', s=100, marker='*', label='End')
+    
+    # 지구 표시
+    if show_earth:
+        u = np.linspace(0, 2 * np.pi, 30)
+        v = np.linspace(0, np.pi, 20)
+        x_earth = 6371e3 * np.outer(np.cos(u), np.sin(v))  # 미터 단위
+        y_earth = 6371e3 * np.outer(np.sin(u), np.sin(v))
+        z_earth = 6371e3 * np.outer(np.ones(np.size(u)), np.cos(v))
+        ax.plot_surface(x_earth, y_earth, z_earth, color='lightblue', alpha=0.3)
+    
+    # 축 설정
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.set_zlabel('Z (m)')
     ax.set_title(title)
     ax.legend()
     ax.grid(True, alpha=0.3)
-
+    
+    # 축 범위 설정
     combined = np.vstack((evader_states[:, :3], pursuer_states[:, :3]))
-    max_range = np.max(np.abs(combined))
+    max_range = np.max(np.abs(combined)) * 1.1  # 10% 여유
     ax.set_xlim(-max_range, max_range)
     ax.set_ylim(-max_range, max_range)
     ax.set_zlim(-max_range, max_range)
-
+    
+    # 통계 정보 표시
+    if show_stats:
+        # 초기/최종 거리
+        initial_dist = np.linalg.norm(evader_states[0, :3] - pursuer_states[0, :3])
+        final_dist = np.linalg.norm(evader_states[-1, :3] - pursuer_states[-1, :3])
+        
+        # 평균 고도
+        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6371e3
+        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6371e3
+        
+        textstr = f'Initial Distance: {initial_dist/1000:.1f} km\n'
+        textstr += f'Final Distance: {final_dist/1000:.1f} km\n'
+        textstr += f'Duration: {times[-1]/60:.1f} min\n'
+        textstr += f'Avg Altitude: E={evader_alt/1000:.0f} km, P={pursuer_alt/1000:.0f} km'
+        
+        props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+        ax.text2D(0.05, 0.95, textstr, transform=ax.transAxes, 
+                  fontsize=10, verticalalignment='top', bbox=props)
+    
+    # 뷰 각도 설정 (더 나은 시각화를 위해)
+    ax.view_init(elev=20, azim=45)
+    
     plt.tight_layout()
-
+    
+    # 저장 또는 표시
     if save_path:
-        plt.savefig(f"{save_path}_eci.png", dpi=PLOT_PARAMS['dpi'])
+        plt.savefig(f"{save_path}_eci.png", dpi=PLOT_PARAMS['dpi'], bbox_inches='tight')
+        
+        # 데이터도 저장
         ephemeris_data = {
             't': times.tolist(),
             'evader': evader_states.tolist(),
@@ -619,8 +663,10 @@ def plot_eci_trajectories(times: np.ndarray,
         }
         with open(f"{save_path}_eci.json", 'w') as f:
             json.dump(ephemeris_data, f, indent=2)
-
-    plt.close()
+        
+        plt.close()
+    else:
+        plt.show()  # save_path가 없으면 화면에 표시
 
 def numpy_to_python(obj):
     """NumPy 타입을 Python 기본 타입으로 변환"""
