@@ -872,7 +872,7 @@ class PursuitEvasionEnv(gym.Env):
             return True, self.termination_details
 
         # 3. 최대 단계 초과 (최소 3궤도는 보장)
-        if self.step_count >= self.max_steps and self.complete_orbits >= 3:
+        if self.step_count >= self.max_steps or self.complete_orbits >= 3:
             norm_distance = min(rho_mag / self.evasion_distance, 1.0)
             self.termination_details = {
                 "outcome": "max_steps_reached",
