@@ -24,16 +24,16 @@ DEFAULT_ORBIT_PARAMS = {
 ENV_PARAMS = {
     "dt": 30.0,  # 시간 간격 (s)
     "k": 2,  # 추격자 행동 주기
-    "delta_v_emax": 8.0,  # 회피자 최대 delta-v (m/s)
-    "delta_v_pmax": 15.0,  # 추격자 최대 delta-v (m/s)
-    "sigma_noise": 5.0,  # 추격자 노이즈 (m/s)
-    "sensor_noise_sigma": 10,  # 센서 노이즈 (m, m/s)
+    "delta_v_emax": 0.15,  # 회피자 최대 delta-v (m/s)
+    "delta_v_pmax": 0.25,  # 추격자 최대 delta-v (m/s)
+    "sigma_noise": 0.05,  # 추격자 노이즈 (m/s)
+    "sensor_noise_sigma": 100,  # 센서 노이즈 (m, m/s)
     "sensor_range": 5e3,  # 센서 최대 범위 (m)
     "capture_distance": 1000.0,  # 포착 거리 (m)
     "evasion_distance": 50e3,  # 회피 거리 (m)
-    "c": 0.001,  # 제어 비용 계수
-    "max_steps": 10000,  # 최대 스텝 수
-    "max_delta_v_budget": 300.0,  # 최대 추진제 예산 (m/s)
+    "c": 0.01,  # 제어 비용 계수
+    "max_steps": 1000,  # 최대 스텝 수
+    "max_delta_v_budget": 250.0,  # 최대 추진제 예산 (m/s)
     "max_initial_separation": 5e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
     "use_gastm": False,
@@ -48,8 +48,8 @@ BUFFER_PARAMS = {
 
 # 학습 파라미터
 TRAINING_PARAMS = {
-    "total_timesteps": 30000,
-    "nash_total_timesteps": 150000,
+    "total_timesteps": 100000,
+    "nash_total_timesteps": 50000,
     "learning_rate": 0.0001,
     "buffer_size": 100000,
     "batch_size": 512,
