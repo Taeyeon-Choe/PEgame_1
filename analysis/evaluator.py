@@ -36,9 +36,10 @@ class ModelEvaluator:
         self.trajectories = []
         self.detailed_stats = {}
         
-    def evaluate_multiple_scenarios(self, n_tests: int = 10, 
+    def evaluate_multiple_scenarios(self, n_tests: int = 10,
                                   deterministic: bool = True,
-                                  save_results: bool = True) -> Dict[str, Any]:
+                                  save_results: bool = True,
+                                  track_ephemeris: bool = True) -> Dict[str, Any]:
         """
         다중 시나리오 평가
         
@@ -54,6 +55,7 @@ class ModelEvaluator:
         
         results = []
         trajectories = []
+        all_ephemeris_data = []
         zero_sum_metrics = {
             'evader_rewards': [],
             'pursuer_rewards': [],
@@ -80,10 +82,13 @@ class ModelEvaluator:
             results_dir = None
         
         success_count = 0
-        
+
         for i in range(n_tests):
             print(f"테스트 {i+1}/{n_tests} 실행 중...")
-            
+
+            if track_ephemeris and hasattr(self.env, 'enable_ephemeris_tracking'):
+                self.env.enable_ephemeris_tracking()
+
             # 단일 시나리오 실행
             scenario_result = self.run_single_scenario(
                 deterministic=deterministic,
@@ -106,6 +111,10 @@ class ModelEvaluator:
             
             # Zero-Sum 메트릭 수집
             self._collect_zero_sum_metrics(scenario_result, zero_sum_metrics)
+
+            if track_ephemeris and hasattr(self.env, 'get_ephemeris_data'):
+                eph = self.env.get_ephemeris_data()
+                all_ephemeris_data.append({'test_id': i, 'outcome': outcome, 'ephemeris': eph})
         
         # 종합 결과 계산
         comprehensive_results = self._calculate_comprehensive_results(
@@ -122,8 +131,25 @@ class ModelEvaluator:
         self.evaluation_results = results
         self.trajectories = trajectories
         self.detailed_stats = comprehensive_results
-        
-        return comprehensive_results
+
+        evaluation_results = {
+            'results': results,
+            'summary': comprehensive_results,
+            'trajectories': trajectories,
+            'ephemeris_data': all_ephemeris_data if track_ephemeris else None
+        }
+
+        # Ephemeris 저장 및 플롯
+        if save_results and track_ephemeris and all_ephemeris_data:
+            import pickle
+            eph_path = f"{results_dir}/all_test_ephemeris.pkl"
+            with open(eph_path, 'wb') as f:
+                pickle.dump(all_ephemeris_data, f)
+            from analysis.visualization import plot_ephemeris_3d
+            plot_ephemeris_3d(all_ephemeris_data, save_dir=results_dir)
+            print(f"Ephemeris 데이터 저장: {eph_path}")
+
+        return evaluation_results
     
     def run_single_scenario(self, deterministic: bool = True,
                           scenario_id: Optional[int] = None,

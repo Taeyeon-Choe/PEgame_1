@@ -23,14 +23,14 @@ class TestPursuitEvasionEnv:
         assert self.env.action_space is not None
         assert self.env.observation_space is not None
         assert self.env.action_space.shape == (3,)
-        assert self.env.observation_space.shape == (9,)
+        assert self.env.observation_space.shape == (10,)
 
     def test_reset(self):
         """리셋 기능 테스트"""
         obs = self.env.reset()
 
         # 관측값이 올바른 형태인지 확인
-        assert obs.shape == (9,)
+        assert obs.shape == (10,)
         assert not np.isnan(obs).any()
 
         # 정규화된 관측값이 [-1, 1] 범위 내에 있는지 확인
@@ -48,7 +48,7 @@ class TestPursuitEvasionEnv:
         next_obs, reward, done, info = self.env.step(action)
 
         # 결과 검증
-        assert next_obs.shape == (9,)
+        assert next_obs.shape == (10,)
         assert isinstance(reward, (int, float))
         assert isinstance(done, bool)
         assert isinstance(info, dict)
@@ -90,5 +90,5 @@ class TestPursuitEvasionEnv:
         config.environment.use_gastm = True
         env = PursuitEvasionEnvGASTM(config)
         obs = env.reset()
-        assert obs.shape == (9,)
+        assert obs.shape == (10,)
         env.close()

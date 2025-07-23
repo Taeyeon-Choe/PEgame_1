@@ -127,6 +127,9 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         if "outcome" in termination_info:
             info["outcome"] = termination_info["outcome"]
 
+        # Ephemeris 기록
+        self._record_ephemeris()
+
         return normalized_obs, evader_reward, done, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 

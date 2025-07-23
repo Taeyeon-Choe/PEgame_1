@@ -84,6 +84,13 @@ class PursuitEvasionEnv(gym.Env):
         # 지능형 추격자 관련 변수
         self._init_pursuer_strategy()
 
+        # Ephemeris 추적 관련 설정
+        self.track_ephemeris = False
+        self.ephemeris_data = {
+            'evader': {'t': [], 'x': [], 'y': [], 'z': [], 'vx': [], 'vy': [], 'vz': []},
+            'pursuer': {'t': [], 'x': [], 'y': [], 'z': [], 'vx': [], 'vy': [], 'vz': []}
+        }
+
         # 상태 변수
         self.step_count = 0
         self.t = 0
@@ -226,6 +233,60 @@ class PursuitEvasionEnv(gym.Env):
         self.pursuer_action_history = deque(maxlen=100)
         self.pursuer_success_history = deque(maxlen=100)
         self.cached_projection_dirs = []
+
+    # ------------------------------------------------------------------
+    # Ephemeris tracking utilities
+    # ------------------------------------------------------------------
+    def enable_ephemeris_tracking(self):
+        """Ephemeris 기록을 활성화한다."""
+        self.track_ephemeris = True
+        self.ephemeris_data = {
+            'evader': {'t': [], 'x': [], 'y': [], 'z': [], 'vx': [], 'vy': [], 'vz': []},
+            'pursuer': {'t': [], 'x': [], 'y': [], 'z': [], 'vx': [], 'vy': [], 'vz': []}
+        }
+
+    def disable_ephemeris_tracking(self):
+        """Ephemeris 기록을 비활성화한다."""
+        self.track_ephemeris = False
+
+    def get_ephemeris_data(self) -> Dict[str, Dict[str, list]]:
+        """수집된 ephemeris 데이터를 반환한다."""
+        return self.ephemeris_data
+
+    def _record_ephemeris(self):
+        """현재 시간을 기준으로 ECI 좌표를 기록한다."""
+        if not self.track_ephemeris:
+            return
+
+        # 회피자(Chief) 절대 좌표
+        r_evader_eci, v_evader_eci = self.evader_orbit.get_position_velocity(self.t)
+
+        # 추격자 상대 상태를 ECI로 변환
+        rotation_matrix = self.evader_orbit._get_rotation_matrix()
+        r_rel_eci = rotation_matrix @ self.state[:3]
+        v_rel_eci = rotation_matrix @ self.state[3:6]
+        omega_vec = np.array([0, 0, self.evader_orbit.n])
+        omega_cross_r = rotation_matrix @ np.cross(omega_vec, self.state[:3])
+
+        r_pursuer_eci = r_evader_eci + r_rel_eci
+        v_pursuer_eci = v_evader_eci + v_rel_eci + omega_cross_r
+
+        # 데이터 저장
+        self.ephemeris_data['evader']['t'].append(self.t)
+        self.ephemeris_data['evader']['x'].append(r_evader_eci[0])
+        self.ephemeris_data['evader']['y'].append(r_evader_eci[1])
+        self.ephemeris_data['evader']['z'].append(r_evader_eci[2])
+        self.ephemeris_data['evader']['vx'].append(v_evader_eci[0])
+        self.ephemeris_data['evader']['vy'].append(v_evader_eci[1])
+        self.ephemeris_data['evader']['vz'].append(v_evader_eci[2])
+
+        self.ephemeris_data['pursuer']['t'].append(self.t)
+        self.ephemeris_data['pursuer']['x'].append(r_pursuer_eci[0])
+        self.ephemeris_data['pursuer']['y'].append(r_pursuer_eci[1])
+        self.ephemeris_data['pursuer']['z'].append(r_pursuer_eci[2])
+        self.ephemeris_data['pursuer']['vx'].append(v_pursuer_eci[0])
+        self.ephemeris_data['pursuer']['vy'].append(v_pursuer_eci[1])
+        self.ephemeris_data['pursuer']['vz'].append(v_pursuer_eci[2])
 
     def _normalize_obs(
         self, state: np.ndarray, pursuer_action: np.ndarray
@@ -616,7 +677,10 @@ class PursuitEvasionEnv(gym.Env):
                     "l": self.step_count,  # 에피소드 길이
                 }
             })
-    
+
+        # Ephemeris 기록
+        self._record_ephemeris()
+
         return normalized_obs, evader_reward, done, info
 
     def _apply_evader_delta_v(self, delta_v_e: np.ndarray):

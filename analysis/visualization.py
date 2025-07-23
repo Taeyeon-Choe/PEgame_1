@@ -697,5 +697,64 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
                     print(f"  {k}: {type(v)}")
 
 
+def plot_ephemeris_3d(ephemeris_data_list, save_dir=None):
+    """여러 에피소드의 궤도를 3D로 플롯"""
+    setup_matplotlib()
+    fig = plt.figure(figsize=(12, 9))
+    ax = fig.add_subplot(111, projection='3d')
+
+    for epi in ephemeris_data_list:
+        eph = epi['ephemeris']
+        pursuer = np.array([eph['pursuer']['x'], eph['pursuer']['y'], eph['pursuer']['z']]).T / 1000
+        evader = np.array([eph['evader']['x'], eph['evader']['y'], eph['evader']['z']]).T / 1000
+        ax.plot(evader[:,0], evader[:,1], evader[:,2], 'b-', alpha=0.3)
+        ax.plot(pursuer[:,0], pursuer[:,1], pursuer[:,2], 'r-')
+
+    ax.set_xlabel('X (km)')
+    ax.set_ylabel('Y (km)')
+    ax.set_zlabel('Z (km)')
+    ax.set_title('ECI Trajectories')
+
+    plt.tight_layout()
+    if save_dir:
+        plt.savefig(f"{save_dir}/ephemeris_3d_plot.png", dpi=PLOT_PARAMS['dpi'])
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_single_ephemeris(ephemeris_data, title="Orbital Ephemeris", save_path=None):
+    """단일 에피소드의 ephemeris 상세 플롯"""
+    setup_matplotlib()
+    t = np.array(ephemeris_data['evader']['t']) / 60.0
+    ev_pos = np.array([ephemeris_data['evader']['x'], ephemeris_data['evader']['y'], ephemeris_data['evader']['z']]).T / 1000
+    pu_pos = np.array([ephemeris_data['pursuer']['x'], ephemeris_data['pursuer']['y'], ephemeris_data['pursuer']['z']]).T / 1000
+    rel = np.linalg.norm(ev_pos - pu_pos, axis=1)
+
+    fig, axs = plt.subplots(2, 2, figsize=(14,10))
+    ax3d = fig.add_subplot(221, projection='3d')
+    ax3d.plot(ev_pos[:,0], ev_pos[:,1], ev_pos[:,2],'b-', label='Evader')
+    ax3d.plot(pu_pos[:,0], pu_pos[:,1], pu_pos[:,2],'r-', label='Pursuer')
+    ax3d.set_xlabel('X (km)'); ax3d.set_ylabel('Y (km)'); ax3d.set_zlabel('Z (km)')
+    ax3d.legend(); ax3d.set_title('Trajectory')
+
+    axs[0,1].plot(t, rel)
+    axs[0,1].set_xlabel('Time (min)'); axs[0,1].set_ylabel('Relative Dist (km)')
+
+    axs[1,0].plot(t, ev_pos)
+    axs[1,0].set_xlabel('Time (min)'); axs[1,0].set_ylabel('Evader Pos (km)')
+
+    axs[1,1].plot(t, pu_pos)
+    axs[1,1].set_xlabel('Time (min)'); axs[1,1].set_ylabel('Pursuer Pos (km)')
+
+    plt.suptitle(title)
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=PLOT_PARAMS['dpi'])
+        plt.close()
+    else:
+        plt.show()
+
+
 # 모듈 초기화 시 matplotlib 설정
 setup_matplotlib()

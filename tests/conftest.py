@@ -30,6 +30,6 @@ def mock_environment():
     from unittest.mock import Mock
     env = Mock()
     env.action_space.shape = (3,)
-    env.observation_space.shape = (9,)
+    env.observation_space.shape = (10,)
     env.action_space.sample.return_value = np.zeros(3)
     return env

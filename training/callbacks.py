@@ -19,7 +19,7 @@ from analysis.visualization import plot_training_progress
 class EvasionTrackingCallback(BaseCallback):
     """회피 결과 추적 콜백 (벡터 환경 완전 지원)"""
     
-    def __init__(self, verbose=0, window_size=100, log_dir=None):
+    def __init__(self, verbose=0, window_size=100, log_dir=None, save_final_ephemeris=True):
         super().__init__(verbose)
         self.outcomes = []
         self.success_rates = []
@@ -55,6 +55,14 @@ class EvasionTrackingCallback(BaseCallback):
         # Nash Equilibrium 평가를 위한 정책 히스토리
         self.policy_history = []
         self.eval_frequency = ANALYSIS_PARAMS['eval_frequency']
+
+        self.save_final_ephemeris = save_final_ephemeris
+        self.final_episode_ephemeris = None
+        self.is_final_episode = False
+
+    def _on_training_start(self) -> None:
+        """학습 시작 시 총 타임스텝 저장"""
+        self.total_timesteps = getattr(self.model, '_total_timesteps', 0) or 0
     
     def _on_step(self):
         """에피소드 종료 시 처리 - 벡터 환경 완전 지원"""
@@ -71,7 +79,18 @@ class EvasionTrackingCallback(BaseCallback):
         for env_idx, (done, info) in enumerate(zip(dones, infos)):
             if done and info:  # info가 비어있지 않은지 확인
                 self._process_episode_end(info, env_idx)
-        
+
+        # 마지막 에피소드 근처에서 ephemeris 추적 활성화
+        if hasattr(self, 'total_timesteps') and self.total_timesteps:
+            remaining = self.total_timesteps - self.model.num_timesteps
+            if remaining <= self.training_env.num_envs * 1000 and not self.is_final_episode:
+                self.is_final_episode = True
+                for env in self.training_env.envs:
+                    if hasattr(env, 'enable_ephemeris_tracking'):
+                        env.enable_ephemeris_tracking()
+                if self.verbose > 0:
+                    print("최종 에피소드 ephemeris 추적 시작")
+
         return True
     
     def _process_episode_end(self, info, env_idx=0):
@@ -276,9 +295,23 @@ class EvasionTrackingCallback(BaseCallback):
         stats_path = os.path.join(self.log_dir, "training_stats.json")
         with open(stats_path, 'w') as f:
             json.dump(stats, f, indent=2)
-        
+
         if self.verbose > 0:
             print(f"학습 통계 저장: {stats_path}")
+
+        if self.save_final_ephemeris and self.is_final_episode:
+            for env in getattr(self.training_env, 'envs', []):
+                if hasattr(env, 'get_ephemeris_data'):
+                    eph = env.get_ephemeris_data()
+                    if eph['evader']['t']:
+                        self.final_episode_ephemeris = eph
+                        import pickle
+                        eph_path = os.path.join(self.log_dir, "final_episode_ephemeris.pkl")
+                        with open(eph_path, 'wb') as pf:
+                            pickle.dump(eph, pf)
+                        if self.verbose > 0:
+                            print(f"최종 에피소드 ephemeris 저장: {eph_path}")
+                        break
 
 
 class PerformanceCallback(BaseCallback):
