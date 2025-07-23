@@ -591,6 +591,31 @@ class PursuitEvasionEnv(gym.Env):
                 info["buffer_time"] = termination_info["buffer_time"]
             if "orbit_consistency" in termination_info:
                 info["orbit_consistency"] = termination_info["orbit_consistency"]
+
+        if done:
+            # 최종 상대거리 저장
+            self.final_relative_distance = current_relative_distance
+            
+            # 종료 정보 업데이트
+            info.update({
+                # 기본 종료 정보
+                "outcome": termination_info.get("outcome", "unknown"),
+                "termination_details": termination_info,
+                
+                # 궤도 정보
+                "initial_evader_orbital_elements": self.initial_evader_orbital_elements,
+                "initial_pursuer_orbital_elements": self.initial_pursuer_orbital_elements,
+                "initial_relative_distance": self.initial_relative_distance,
+                "final_relative_distance": self.final_relative_distance,
+                
+                # 보상 정보
+                "evader_reward": evader_reward,
+                "pursuer_reward": pursuer_reward,
+                "episode": {
+                    "r": evader_reward,  # 총 보상
+                    "l": self.step_count,  # 에피소드 길이
+                }
+            })
     
         return normalized_obs, evader_reward, done, info
 
