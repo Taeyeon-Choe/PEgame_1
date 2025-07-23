@@ -16,7 +16,7 @@ from analysis.visualization import plot_training_progress
 
 
 class EvasionTrackingCallback(BaseCallback):
-    """회피 결과 추적 콜백 (벡터 환경 지원)"""
+    """회피 결과 추적 콜백 (벡터 환경 완전 지원)"""
     
     def __init__(self, verbose=0, window_size=100, log_dir=None):
         super().__init__(verbose)
@@ -56,135 +56,105 @@ class EvasionTrackingCallback(BaseCallback):
         self.eval_frequency = ANALYSIS_PARAMS['eval_frequency']
     
     def _on_step(self):
-        """에피소드 종료 시 처리 - 벡터 환경 지원"""
-        dones = self.locals.get('dones')
-        infos = self.locals.get('infos')
+        """에피소드 종료 시 처리 - 벡터 환경 완전 지원"""
+        dones = self.locals.get('dones', [False])
+        infos = self.locals.get('infos', [{}])
         
-        if dones is None or infos is None:
-            return True
+        # 단일 값을 리스트로 변환
+        if not isinstance(dones, (list, np.ndarray)):
+            dones = [dones]
+        if not isinstance(infos, list):
+            infos = [infos]
         
-        # 벡터 환경인지 확인
-        is_vectorized = isinstance(dones, np.ndarray)
-        
-        if is_vectorized:
-            # 벡터 환경 처리
-            for i, done in enumerate(dones):
-                if done:
-                    self._process_episode_end(infos[i], i)
-        else:
-            # 단일 환경 처리
-            if dones:
-                self._process_episode_end(infos, 0)
+        # 각 환경 처리
+        for env_idx, (done, info) in enumerate(zip(dones, infos)):
+            if done and info:  # info가 비어있지 않은지 확인
+                self._process_episode_end(info, env_idx)
         
         return True
     
-    def _process_episode_end(self, info, env_idx):
+    def _process_episode_end(self, info, env_idx=0):
         """에피소드 종료 처리"""
-        # 환경 접근 (벡터 환경과 단일 환경 모두 지원)
-        if hasattr(self.training_env, 'envs'):
-            # 벡터 환경
-            if hasattr(self.training_env.envs[env_idx], 'unwrapped'):
-                env = self.training_env.envs[env_idx].unwrapped
-            else:
-                env = self.training_env.envs[env_idx]
-        else:
-            # 단일 환경
-            env = self.training_env.unwrapped if hasattr(self.training_env, 'unwrapped') else self.training_env
+        self.episode_count += 1
         
-        if 'outcome' in info:
-            outcome = info['outcome']
-            self.outcomes.append(outcome)
-            self.episode_count += 1
-            
-            # 결과별 카운트 증가
-            self._update_outcome_counts(outcome)
-            
-            # 성공 여부 계산
-            success = outcome in ['permanent_evasion', 'conditional_evasion', 'evaded', 'max_steps_reached']
-            self.success_window.append(float(success))
-            
-            # 버퍼 시간 통계 추적
-            if 'buffer_time' in info:
-                self.buffer_time_stats.append(info['buffer_time'])
-            
-            # Zero-Sum 게임 보상 기록
-            evader_reward = info.get('evader_reward', 0)
-            pursuer_reward = info.get('pursuer_reward', -evader_reward)
-            self.evader_rewards.append(evader_reward)
-            self.pursuer_rewards.append(pursuer_reward)
-            
-            # Nash Equilibrium 메트릭 계산
-            if self.episode_count % self.eval_frequency == 0:
-                nash_metric = self.evaluate_nash_equilibrium(env)
-                self.nash_equilibrium_metrics.append(nash_metric)
-                
-                # 정책 저장
-                if len(self.policy_history) < 5:
-                    self.policy_history.append(
-                        copy.deepcopy(self.model.policy.state_dict())
-                    )
-            
-            # 이동 평균 성공률 계산
-            if len(self.success_window) > 0:
-                success_rate = sum(self.success_window) / len(self.success_window)
-                self.success_rates.append(success_rate)
-                
-                # 에피소드 정보 기록
-                self._record_episode_info(env, outcome, success, evader_reward, pursuer_reward, info)
-                
-                # 로그 출력
-                if self.episode_count % 100 == 0:
-                    self._print_progress_log(success_rate, env)
-                    self.plot_interim_results()
-            
-            # Tensorboard 로깅
-            self._log_to_tensorboard(success_rate if 'success_rate' in locals() else 0.0)
-    
-    def _update_outcome_counts(self, outcome):
-        """결과별 카운트 업데이트"""
-        if outcome == 'captured':
-            self.captures += 1
-        elif outcome == 'permanent_evasion':
-            self.permanent_evasions += 1
-            self.evasions += 1
-        elif outcome == 'conditional_evasion':
-            self.conditional_evasions += 1
-            self.evasions += 1
-        elif outcome == 'temporary_evasion':
-            self.temporary_evasions += 1
-        elif outcome == 'evaded':
-            self.evasions += 1
-        elif outcome == 'fuel_depleted':
-            self.fuel_depleted += 1
-        elif outcome == 'max_steps_reached':
-            self.max_steps += 1
-    
-    def _record_episode_info(self, env, outcome, success, evader_reward, pursuer_reward, info):
-        """에피소드 정보 기록"""
+        # 결과 정보 추출
+        outcome = info.get('outcome', 'unknown').lower()
+        termination_details = info.get('termination_details', {})
+        
+        # 성공 여부 판단
+        success = outcome in ['permanent_evasion', 'conditional_evasion', 'temporary_evasion', 'max_steps_reached']
+        self.success_window.append(1 if success else 0)
+        
+        # 보상 정보
+        evader_reward = termination_details.get('evader_reward', info.get('evader_reward', 0))
+        pursuer_reward = termination_details.get('pursuer_reward', info.get('pursuer_reward', 0))
+        
+        # 각종 메트릭 업데이트
+        self._update_outcome_counts(outcome)
+        self.evader_rewards.append(evader_reward)
+        self.pursuer_rewards.append(pursuer_reward)
+        self.nash_equilibrium_metrics.append(info.get('nash_metric', 0))
+        
+        # 버퍼 시간 기록
+        buffer_time = termination_details.get('buffer_time', info.get('buffer_time', 0))
+        if buffer_time > 0:
+            self.buffer_time_stats.append(buffer_time)
+        
+        # 성공률 계산
+        if len(self.success_window) > 0:
+            success_rate = sum(self.success_window) / len(self.success_window)
+            self.success_rates.append(success_rate)
+        
+        # 에피소드 정보 기록
         episode_info = {
             'episode': self.episode_count,
+            'env_idx': env_idx,
             'outcome': outcome,
             'success': success,
             'evader_reward': evader_reward,
             'pursuer_reward': pursuer_reward,
             'nash_metric': self.nash_equilibrium_metrics[-1] if self.nash_equilibrium_metrics else 0,
-            'buffer_time': info.get('buffer_time', 0)
+            'buffer_time': buffer_time,
+            'evader_elements': info.get('initial_evader_orbital_elements', {}),
+            'pursuer_elements': info.get('initial_pursuer_orbital_elements', {}),
+            'initial_distance': info.get('initial_relative_distance', 0),
+            'final_distance': info.get('final_relative_distance', 0)
         }
-        
-        # 환경의 초기 조건 정보가 있으면 추가
-        if hasattr(env, 'initial_evader_orbital_elements'):
-            episode_info.update({
-                'evader_elements': env.initial_evader_orbital_elements,
-                'pursuer_elements': env.initial_pursuer_orbital_elements,
-                'initial_distance': env.initial_relative_distance,
-                'final_distance': getattr(env, 'final_relative_distance', None),
-            })
-        
         self.episodes_info.append(episode_info)
+        
+        # 주기적 로그 출력
+        if self.episode_count % 100 == 0:
+            self._print_progress_log()
+            self.plot_interim_results()
+        
+        # Tensorboard 로깅
+        self._log_to_tensorboard(success_rate if 'success_rate' in locals() else 0.0)
     
-    def _print_progress_log(self, success_rate, env):
+    def _update_outcome_counts(self, outcome):
+        """결과별 카운트 업데이트"""
+        outcome = outcome.lower()
+        if 'captured' in outcome:
+            self.captures += 1
+        elif 'permanent_evasion' in outcome:
+            self.permanent_evasions += 1
+            self.evasions += 1
+        elif 'conditional_evasion' in outcome:
+            self.conditional_evasions += 1
+            self.evasions += 1
+        elif 'temporary_evasion' in outcome:
+            self.temporary_evasions += 1
+        elif 'fuel_depleted' in outcome:
+            self.fuel_depleted += 1
+        elif 'max_steps' in outcome:
+            self.max_steps += 1
+    
+    def _print_progress_log(self):
         """진행 상황 로그 출력"""
-        print(f"\n===== 에피소드 {self.episode_count} - 성공률(최근 {len(self.success_window)}): {success_rate:.2%} =====")
+        success_rate = self.success_rates[-1] if self.success_rates else 0
+        
+        print(f"\n{'='*70}")
+        print(f"에피소드 {self.episode_count} - 성공률(최근 {len(self.success_window)}): {success_rate:.2%}")
+        print(f"{'='*70}")
         print(f"  - 결과 분포: 포획={self.captures}, 영구회피={self.permanent_evasions}, "
               f"조건부회피={self.conditional_evasions}, 임시회피={self.temporary_evasions}, "
               f"연료소진={self.fuel_depleted}, 최대스텝={self.max_steps}")
@@ -200,159 +170,114 @@ class EvasionTrackingCallback(BaseCallback):
                   f"{np.mean(self.pursuer_rewards[-100:]):.4f}")
             print(f"  - Zero-Sum 검증: {np.mean(self.evader_rewards[-100:]) + np.mean(self.pursuer_rewards[-100:]):.6f}")
         
-        # 최근 에피소드의 초기 조건 출력 (선택적)
-        if hasattr(env, 'initial_evader_orbital_elements'):
-            self._print_orbital_elements(env)
-    
-    def _print_orbital_elements(self, env):
-        """궤도 요소 정보 출력"""
-        if not self.episodes_info or not hasattr(env, 'initial_evader_orbital_elements'):
-            return
-        
-        latest_info = self.episodes_info[-1]
-        if 'evader_elements' not in latest_info:
-            return
+        # 최근 에피소드 정보 출력
+        if self.episodes_info:
+            latest_info = self.episodes_info[-1]
+            print("\n초기 조건:")
             
-        evader_elements = latest_info['evader_elements']
-        pursuer_elements = latest_info['pursuer_elements']
+            # 회피자 궤도 요소
+            evader_elements = latest_info.get('evader_elements', {})
+            if evader_elements:
+                print("  회피자 궤도 요소:")
+                print(f"    - 반장축(a): {evader_elements.get('a', 0)/1000:.2f} km")
+                print(f"    - 이심률(e): {evader_elements.get('e', 0):.6f}")
+                print(f"    - 경사각(i): {evader_elements.get('i', 0)*180/np.pi:.4f} deg")
+            
+            # 추격자 궤도 요소
+            pursuer_elements = latest_info.get('pursuer_elements', {})
+            if pursuer_elements:
+                print("  추격자 궤도 요소:")
+                print(f"    - 반장축(a): {pursuer_elements.get('a', 0)/1000:.2f} km")
+                print(f"    - 이심률(e): {pursuer_elements.get('e', 0):.6f}")
+                print(f"    - 경사각(i): {pursuer_elements.get('i', 0)*180/np.pi:.4f} deg")
+            
+            print(f"  초기 상대 거리: {latest_info.get('initial_distance', 0):.2f} m")
+            print(f"  최종 상대 거리: {latest_info.get('final_distance', 0):.2f} m")
+            print(f"  결과: {latest_info.get('outcome', 'UNKNOWN').upper()}")
         
-        print("\n초기 조건:")
-        print("  회피자 궤도 요소:")
-        print(f"    - 반장축(a): {evader_elements['a']/1000:.2f} km")
-        print(f"    - 이심률(e): {evader_elements['e']:.6f}")
-        print(f"    - 경사각(i): {evader_elements['i']*180/np.pi:.4f} deg")
-        
-        print("  추격자 궤도 요소:")
-        print(f"    - 반장축(a): {pursuer_elements['a']/1000:.2f} km")
-        print(f"    - 이심률(e): {pursuer_elements['e']:.6f}")
-        print(f"    - 경사각(i): {pursuer_elements['i']*180/np.pi:.4f} deg")
-        
-        print(f"\n  초기 상대 거리: {latest_info.get('initial_distance', 0):.2f} m")
-        print(f"  최종 상대 거리: {latest_info.get('final_distance', 'N/A')}")
-        print(f"  결과: {latest_info['outcome'].upper()}")
-        print("\n" + "="*70)
+        print(f"{'='*70}")
     
     def _log_to_tensorboard(self, success_rate):
-        """Tensorboard에 로깅"""
-        if hasattr(self, 'logger') and self.logger is not None:
+        """Tensorboard 로깅"""
+        # SB3의 logger 사용
+        if self.logger is not None:
             self.logger.record("evasion/success_rate", success_rate)
-            self.logger.record("evasion/capture_rate", self.captures / max(self.episode_count, 1))
-            self.logger.record("evasion/evade_rate", self.evasions / max(self.episode_count, 1))
+            self.logger.record("evasion/capture_rate", self.captures / max(1, self.episode_count))
+            self.logger.record("evasion/evade_rate", self.evasions / max(1, self.episode_count))
+            self.logger.record("evasion/permanent_evasion_rate", 
+                             self.permanent_evasions / max(1, self.episode_count))
+            self.logger.record("evasion/conditional_evasion_rate", 
+                             self.conditional_evasions / max(1, self.episode_count))
+            self.logger.record("evasion/temporary_evasion_rate", 
+                             self.temporary_evasions / max(1, self.episode_count))
             
-            # 세분화된 회피 결과 로깅
-            self.logger.record("evasion/permanent_evasion_rate", self.permanent_evasions / max(self.episode_count, 1))
-            self.logger.record("evasion/conditional_evasion_rate", self.conditional_evasions / max(self.episode_count, 1))
-            self.logger.record("evasion/temporary_evasion_rate", self.temporary_evasions / max(self.episode_count, 1))
-            
-            # Zero-Sum 게임 메트릭 로깅
-            if len(self.evader_rewards) > 0:
-                self.logger.record("zero_sum/evader_reward", self.evader_rewards[-1])
-                self.logger.record("zero_sum/pursuer_reward", self.pursuer_rewards[-1])
-            if len(self.nash_equilibrium_metrics) > 0:
+            # Zero-Sum 메트릭
+            if self.evader_rewards:
+                self.logger.record("zero_sum/evader_reward", np.mean(self.evader_rewards[-100:]))
+                self.logger.record("zero_sum/pursuer_reward", np.mean(self.pursuer_rewards[-100:]))
                 self.logger.record("zero_sum/nash_metric", self.nash_equilibrium_metrics[-1])
-            
-            # 버퍼 시간 로깅
-            if self.buffer_time_stats:
-                self.logger.record("termination/buffer_time", self.buffer_time_stats[-1])
-    
-    def evaluate_nash_equilibrium(self, env):
-        """Nash Equilibrium 평가 메트릭"""
-        if not hasattr(self, 'model') or len(self.policy_history) < 2:
-            return 0.0
-        
-        # 1. 정책 안정성 평가
-        current_policy = self.model.policy.state_dict()
-        previous_policy = self.policy_history[-1]
-        
-        policy_distance = 0.0
-        for key in current_policy:
-            if key in previous_policy:
-                policy_distance += torch.norm(
-                    current_policy[key] - previous_policy[key]
-                ).item() ** 2
-        policy_distance = np.sqrt(policy_distance)
-        
-        policy_stability = 1.0 / (1.0 + policy_distance)
-        
-        # 2. Zero-Sum 특성 검증
-        if len(self.evader_rewards) >= 100:
-            recent_evader = np.mean(self.evader_rewards[-100:])
-            recent_pursuer = np.mean(self.pursuer_rewards[-100:])
-            zero_sum_metric = 1.0 / (1.0 + abs(recent_evader + recent_pursuer))
-        else:
-            zero_sum_metric = 0.5
-        
-        # 3. 보상 변동성 감소
-        if len(self.evader_rewards) >= 100:
-            evader_std = np.std(self.evader_rewards[-100:])
-            pursuer_std = np.std(self.pursuer_rewards[-100:])
-            reward_stability = 1.0 / (1.0 + evader_std + pursuer_std)
-        else:
-            reward_stability = 0.5
-        
-        # 종합 Nash Equilibrium 메트릭
-        nash_metric = 0.4 * policy_stability + 0.4 * zero_sum_metric + 0.2 * reward_stability
-        
-        return nash_metric
     
     def plot_interim_results(self):
-        """중간 결과 시각화"""
-        plot_training_progress(
-            self.success_rates,
-            [self.captures, self.permanent_evasions, self.conditional_evasions, 
-             self.fuel_depleted, self.max_steps],
-            self.evader_rewards,
-            self.pursuer_rewards,
-            self.nash_equilibrium_metrics,
-            self.buffer_time_stats,
-            self.episode_count,
-            self.log_dir
-        )
-    
-    def plot_success_rate(self):
-        """학습 완료 후 최종 결과 시각화"""
-        self.plot_interim_results()
+        """중간 결과 플롯 생성"""
+        if self.episode_count == 0:
+            return
         
-        # 추가적인 최종 분석 그래프들
-        self._plot_final_analysis()
-    
-    def _plot_final_analysis(self):
-        """최종 분석 그래프들"""
-        # 에피소드별 성공/실패 추세
-        episodes = list(range(1, len(self.outcomes) + 1))
-        outcomes_binary = [
-            1 if o in ['permanent_evasion', 'conditional_evasion', 'evaded', 'max_steps_reached'] 
-            else 0 for o in self.outcomes
+        # 플롯 데이터 준비
+        outcome_counts = [
+            self.captures,
+            self.permanent_evasions,
+            self.conditional_evasions,
+            self.fuel_depleted,
+            self.max_steps
         ]
         
-        plt.figure(figsize=(12, 6))
-        plt.scatter(episodes, outcomes_binary, alpha=0.5, c=outcomes_binary, cmap='RdYlGn')
-        plt.xlabel('에피소드')
-        plt.ylabel('결과 (1=성공, 0=실패)')
-        plt.title('에피소드별 성공/실패')
-        plt.grid(True)
-        plt.savefig(f'{self.log_dir}/episode_outcomes.png')
-        plt.close()
+        try:
+            plot_training_progress(
+                success_rates=self.success_rates,
+                outcome_counts=outcome_counts,
+                evader_rewards=self.evader_rewards,
+                pursuer_rewards=self.pursuer_rewards,
+                nash_metrics=self.nash_equilibrium_metrics,
+                buffer_times=self.buffer_time_stats,
+                episode_count=self.episode_count,
+                save_dir=self.log_dir
+            )
+        except Exception as e:
+            if self.verbose > 0:
+                print(f"플롯 생성 중 오류: {e}")
+    
+    def on_training_end(self):
+        """학습 종료 시 최종 결과 저장"""
+        if self.verbose > 0:
+            print("\n=== 학습 종료 - 최종 통계 ===")
+            print(f"총 에피소드: {self.episode_count}")
+            print(f"최종 성공률: {self.success_rates[-1]:.2%}" if self.success_rates else "N/A")
+            print(f"포획: {self.captures}, 회피: {self.evasions}")
+            print(f"영구회피: {self.permanent_evasions}, 조건부회피: {self.conditional_evasions}")
         
-        # 최종 분포 파이 차트
-        labels = ['Captured', 'Permanent Evasion', 'Conditional Evasion', 'Fuel Depleted', 'Max Steps']
-        sizes = [self.captures, self.permanent_evasions, self.conditional_evasions, 
-                self.fuel_depleted, self.max_steps]
+        # 최종 플롯 생성
+        self.plot_interim_results()
         
-        # 0이 아닌 값들만 필터링
-        filtered_sizes = []
-        filtered_labels = []
-        for size, label in zip(sizes, labels):
-            if size > 0:
-                filtered_sizes.append(size)
-                filtered_labels.append(label)
+        # 학습 통계 저장
+        stats = {
+            "total_episodes": self.episode_count,
+            "final_success_rate": self.success_rates[-1] if self.success_rates else 0,
+            "captures": self.captures,
+            "evasions": self.evasions,
+            "permanent_evasions": self.permanent_evasions,
+            "conditional_evasions": self.conditional_evasions,
+            "temporary_evasions": self.temporary_evasions,
+            "fuel_depleted": self.fuel_depleted,
+            "max_steps": self.max_steps,
+            "episodes_info": self.episodes_info[-100:]  # 마지막 100개만 저장
+        }
         
-        if filtered_sizes:
-            plt.figure(figsize=(10, 10))
-            plt.pie(filtered_sizes, labels=filtered_labels, autopct='%1.1f%%')
-            plt.title('학습 완료 시 결과 분포')
-            plt.savefig(f'{self.log_dir}/final_outcome_distribution.png')
-            plt.close()
+        stats_path = os.path.join(self.log_dir, "training_stats.json")
+        with open(stats_path, 'w') as f:
+            json.dump(stats, f, indent=2)
+        
+        if self.verbose > 0:
+            print(f"학습 통계 저장: {stats_path}")
 
 
 class PerformanceCallback(BaseCallback):
