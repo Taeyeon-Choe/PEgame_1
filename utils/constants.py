@@ -30,7 +30,7 @@ ENV_PARAMS = {
     "sensor_noise_sigma": 100,  # 센서 노이즈 (m, m/s)
     "sensor_range": 5e3,  # 센서 최대 범위 (m)
     "capture_distance": 1000.0,  # 포착 거리 (m)
-    "evasion_distance": 50e3,  # 회피 거리 (m)
+    "evasion_distance": 10e3,  # 회피 거리 (m)
     "c": 0.01,  # 제어 비용 계수
     "max_steps": 1000,  # 최대 스텝 수
     "max_delta_v_budget": 250.0,  # 최대 추진제 예산 (m/s)
