@@ -7,14 +7,13 @@ import os
 import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from stable_baselines3 import SAC
-
 from analysis.visualization import (
     visualize_trajectory, plot_test_results,
     plot_orbital_elements_comparison, create_summary_dashboard,
     plot_eci_trajectories
 )
 from analysis.metrics import calculate_performance_metrics, analyze_trajectory_quality
-from orbital_mechanics import lvlh_to_eci
+from orbital_mechanics.coordinate_transforms import lvlh_to_eci
 
 
 class ModelEvaluator:
