@@ -58,20 +58,23 @@ class EvasionTrackingCallback(BaseCallback):
         self.eval_frequency = ANALYSIS_PARAMS['eval_frequency']
     
     def _on_step(self):
-        """에피소드 종료 시 처리 - 벡터 환경 완전 지원"""
+        """에피소드 종료 시 처리 - 벡터 환경 완전 지원 (수정된 버전)"""
         dones = self.locals.get('dones', [False])
         infos = self.locals.get('infos', [{}])
-        
-        # 단일 값을 리스트로 변환
+
         if not isinstance(dones, (list, np.ndarray)):
             dones = [dones]
         if not isinstance(infos, list):
             infos = [infos]
-        
+
         # 각 환경 처리
-        for env_idx, (done, info) in enumerate(zip(dones, infos)):
-            if done and info:  # info가 비어있지 않은지 확인
-                self._process_episode_end(info, env_idx)
+        for env_idx, done in enumerate(dones):
+            if done:
+                # 'final_info' 키를 확인하여 종료된 에피소드의 실제 정보를 가져옵니다.
+                # 이 정보가 없으면 기존 info를 사용합니다 (단일 환경 호환성).
+                final_info = infos[env_idx].get('final_info')
+                if final_info:
+                    self._process_episode_end(final_info, env_idx)
         
         return True
     
