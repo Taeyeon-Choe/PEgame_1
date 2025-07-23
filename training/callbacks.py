@@ -11,9 +11,8 @@ import json
 from collections import deque
 from stable_baselines3.common.callbacks import BaseCallback
 import torch
-from orbital_mechanics import lvlh_to_eci
+from orbital_mechanics.coordinate_transforms import lvlh_to_eci
 from analysis.visualization import plot_eci_trajectories
-
 from utils.constants import ANALYSIS_PARAMS
 from analysis.visualization import plot_training_progress
 
@@ -470,58 +469,126 @@ class EarlyStoppingCallback(BaseCallback):
 
 class EphemerisLoggerCallback(BaseCallback):
     """최종 에피소드의 ECI 궤적을 기록하는 콜백"""
-
-    def __init__(self, log_dir: str, verbose: int = 0):
+    
+    def __init__(self, log_dir: str, verbose: int = 0, record_last_n_episodes: int = 1):
         super().__init__(verbose)
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
-        self.times = []
-        self.evader_states = []
-        self.pursuer_states = []
-        self.final_episode = None
-
+        self.record_last_n_episodes = record_last_n_episodes
+        
+        # 임시 저장용
+        self.current_episode_data = {
+            'times': [],
+            'evader_states': [],
+            'pursuer_states': []
+        }
+        
+        # 최종 에피소드들 저장
+        self.final_episodes = []
+        self.is_recording = False
+        self.total_timesteps = None
+        
     def _on_training_start(self) -> None:
+        """학습 시작 시 환경 참조 저장"""
         if hasattr(self.training_env, 'envs'):
             self.env = self.training_env.envs[0]
         else:
             self.env = self.training_env
-
+            
+        # 총 타임스텝 수 저장
+        self.total_timesteps = self.model._total_timesteps
+        
     def _on_step(self) -> bool:
-        r_e, v_e = self.env.evader_orbit.get_position_velocity(self.env.t)
-        r_p, v_p = lvlh_to_eci(r_e, v_e, self.env.state)
-
-        self.times.append(self.env.t)
-        self.evader_states.append(np.concatenate((r_e, v_e)))
-        self.pursuer_states.append(np.concatenate((r_p, v_p)))
-
+        """각 스텝에서 호출"""
+        # 남은 타임스텝 계산
+        if self.total_timesteps:
+            remaining_timesteps = self.total_timesteps - self.model.num_timesteps
+            # 대략 1000 스텝 이하 남았을 때부터 기록 시작
+            if remaining_timesteps < 1000 and not self.is_recording:
+                self.is_recording = True
+                if self.verbose > 0:
+                    print(f"최종 에피소드 ECI 궤적 기록 시작 (남은 스텝: {remaining_timesteps})")
+        
+        # 기록 중일 때만 데이터 수집
+        if self.is_recording:
+            # ECI 좌표 계산
+            r_e, v_e = self.env.evader_orbit.get_position_velocity(self.env.t)
+            r_p, v_p = lvlh_to_eci(r_e, v_e, self.env.state)
+            
+            self.current_episode_data['times'].append(self.env.t)
+            self.current_episode_data['evader_states'].append(np.concatenate((r_e, v_e)))
+            self.current_episode_data['pursuer_states'].append(np.concatenate((r_p, v_p)))
+        
+        # 에피소드 종료 확인
         done = self.locals.get('dones', [False])[0]
-        if done:
-            self.final_episode = {
-                't': np.array(self.times),
-                'evader': np.array(self.evader_states),
-                'pursuer': np.array(self.pursuer_states)
+        if done and self.is_recording:
+            # 현재 에피소드 데이터를 저장
+            if self.current_episode_data['times']:
+                episode_data = {
+                    't': np.array(self.current_episode_data['times']),
+                    'evader': np.array(self.current_episode_data['evader_states']),
+                    'pursuer': np.array(self.current_episode_data['pursuer_states']),
+                    'outcome': self.locals.get('infos', [{}])[0].get('outcome', 'unknown')
+                }
+                self.final_episodes.append(episode_data)
+                
+                # 최근 N개만 유지
+                if len(self.final_episodes) > self.record_last_n_episodes:
+                    self.final_episodes.pop(0)
+                
+                if self.verbose > 0:
+                    print(f"에피소드 ECI 데이터 저장 (총 {len(self.final_episodes)}개)")
+            
+            # 현재 에피소드 데이터 초기화
+            self.current_episode_data = {
+                'times': [],
+                'evader_states': [],
+                'pursuer_states': []
             }
-            self.times = []
-            self.evader_states = []
-            self.pursuer_states = []
-
+        
         return True
-
+    
     def _on_training_end(self) -> None:
-        if not self.final_episode:
+        """학습 종료 시 최종 에피소드 저장 및 플롯"""
+        if not self.final_episodes:
+            if self.verbose > 0:
+                print("저장된 최종 에피소드가 없습니다.")
             return
-
+        
+        # 가장 마지막 에피소드 선택
+        final_episode = self.final_episodes[-1]
+        
+        # NumPy 파일로 저장
         path = os.path.join(self.log_dir, 'final_episode_ephemeris.npz')
         np.savez(path,
-                 t=self.final_episode['t'],
-                 evader=self.final_episode['evader'],
-                 pursuer=self.final_episode['pursuer'])
-
+                 t=final_episode['t'],
+                 evader=final_episode['evader'],
+                 pursuer=final_episode['pursuer'],
+                 outcome=final_episode['outcome'])
+        
+        if self.verbose > 0:
+            print(f"최종 에피소드 ECI 데이터 저장: {path}")
+            print(f"  - 시뮬레이션 시간: {final_episode['t'][-1]/60:.1f} 분")
+            print(f"  - 데이터 포인트: {len(final_episode['t'])}")
+            print(f"  - 결과: {final_episode['outcome']}")
+        
+        # 시각화
         plot_eci_trajectories(
-            self.final_episode['t'],
-            self.final_episode['pursuer'],
-            self.final_episode['evader'],
-            save_path=os.path.join(self.log_dir, 'final_episode'))
+            final_episode['t'],
+            final_episode['pursuer'],
+            final_episode['evader'],
+            save_path=os.path.join(self.log_dir, 'final_episode'),
+            title=f"Final Training Episode - {final_episode['outcome']}"
+        )
+        
+        # 모든 최종 에피소드들도 저장 (선택사항)
+        if len(self.final_episodes) > 1:
+            all_path = os.path.join(self.log_dir, 'last_episodes_ephemeris.pkl')
+            import pickle
+            with open(all_path, 'wb') as f:
+                pickle.dump(self.final_episodes, f)
+            if self.verbose > 0:
+                print(f"마지막 {len(self.final_episodes)}개 에피소드 저장: {all_path}")
 
         
 class LearningRateScheduler(BaseCallback):
