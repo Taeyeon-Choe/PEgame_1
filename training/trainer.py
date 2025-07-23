@@ -18,6 +18,7 @@ from training.callbacks import (
     PerformanceCallback,
     ModelSaveCallback,
     EarlyStoppingCallback,
+    EphemerisLoggerCallback,
 )
 
 
@@ -153,7 +154,11 @@ class SACTrainer:
         )
         self.callbacks.append(evasion_callback)
 
-        # 3. 모델 체크포인트 저장
+        # 3. 최종 에피소드 궤적 기록
+        ephemeris_callback = EphemerisLoggerCallback(log_dir=self.log_dir)
+        self.callbacks.append(ephemeris_callback)
+
+        # 4. 모델 체크포인트 저장
         checkpoint_callback = CheckpointCallback(
             save_freq=self.training_config.save_freq,
             save_path=f"{self.log_dir}/models",
@@ -164,7 +169,7 @@ class SACTrainer:
         )
         self.callbacks.append(checkpoint_callback)
 
-        # 4. 평가 콜백 (선택적)
+        # 5. 평가 콜백 (선택적)
         if hasattr(self.env, 'envs'):
             # 벡터화된 환경인 경우
             eval_env = self.env.envs[0] if hasattr(self.env.envs[0], 'reset') else None

@@ -11,6 +11,8 @@ import json
 from collections import deque
 from stable_baselines3.common.callbacks import BaseCallback
 import torch
+from orbital_mechanics import lvlh_to_eci
+from analysis.visualization import plot_eci_trajectories
 
 from utils.constants import ANALYSIS_PARAMS
 from analysis.visualization import plot_training_progress
@@ -464,6 +466,63 @@ class EarlyStoppingCallback(BaseCallback):
                 return False
         
         return True
+
+
+class EphemerisLoggerCallback(BaseCallback):
+    """최종 에피소드의 ECI 궤적을 기록하는 콜백"""
+
+    def __init__(self, log_dir: str, verbose: int = 0):
+        super().__init__(verbose)
+        self.log_dir = log_dir
+        os.makedirs(log_dir, exist_ok=True)
+        self.times = []
+        self.evader_states = []
+        self.pursuer_states = []
+        self.final_episode = None
+
+    def _on_training_start(self) -> None:
+        if hasattr(self.training_env, 'envs'):
+            self.env = self.training_env.envs[0]
+        else:
+            self.env = self.training_env
+
+    def _on_step(self) -> bool:
+        r_e, v_e = self.env.evader_orbit.get_position_velocity(self.env.t)
+        r_p, v_p = lvlh_to_eci(r_e, v_e, self.env.state)
+
+        self.times.append(self.env.t)
+        self.evader_states.append(np.concatenate((r_e, v_e)))
+        self.pursuer_states.append(np.concatenate((r_p, v_p)))
+
+        done = self.locals.get('dones', [False])[0]
+        if done:
+            self.final_episode = {
+                't': np.array(self.times),
+                'evader': np.array(self.evader_states),
+                'pursuer': np.array(self.pursuer_states)
+            }
+            self.times = []
+            self.evader_states = []
+            self.pursuer_states = []
+
+        return True
+
+    def _on_training_end(self) -> None:
+        if not self.final_episode:
+            return
+
+        path = os.path.join(self.log_dir, 'final_episode_ephemeris.npz')
+        np.savez(path,
+                 t=self.final_episode['t'],
+                 evader=self.final_episode['evader'],
+                 pursuer=self.final_episode['pursuer'])
+
+        plot_eci_trajectories(
+            self.final_episode['t'],
+            self.final_episode['pursuer'],
+            self.final_episode['evader'],
+            save_path=os.path.join(self.log_dir, 'final_episode'))
+
         
 class LearningRateScheduler(BaseCallback):
     """학습률 감소 스케줄러"""

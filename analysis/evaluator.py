@@ -9,10 +9,12 @@ from typing import Dict, List, Tuple, Optional, Any
 from stable_baselines3 import SAC
 
 from analysis.visualization import (
-    visualize_trajectory, plot_test_results, 
-    plot_orbital_elements_comparison, create_summary_dashboard
+    visualize_trajectory, plot_test_results,
+    plot_orbital_elements_comparison, create_summary_dashboard,
+    plot_eci_trajectories
 )
 from analysis.metrics import calculate_performance_metrics, analyze_trajectory_quality
+from orbital_mechanics import lvlh_to_eci
 
 
 class ModelEvaluator:
@@ -143,11 +145,14 @@ class ModelEvaluator:
         """
         obs = self.env.reset()
         done = False
-        
+
         # 데이터 수집
         states = []
         actions_e = []
         actions_p = []
+        times = []
+        evader_eci = []
+        pursuer_eci = []
         rewards = {'evader': [], 'pursuer': []}
         step_count = 0
         
@@ -158,7 +163,7 @@ class ModelEvaluator:
             # 환경 스텝
             obs, reward, done, info = self.env.step(normalized_action)
             step_count += 1
-            
+
             # 보상 기록
             evader_reward = info.get('evader_reward', reward)
             pursuer_reward = info.get('pursuer_reward', -reward)
@@ -177,11 +182,20 @@ class ModelEvaluator:
             states.append(phys_state.copy())
             actions_e.append(action_e.copy())
             actions_p.append(action_p.copy())
+
+            r_e, v_e = self.env.evader_orbit.get_position_velocity(self.env.t)
+            r_p, v_p = lvlh_to_eci(r_e, v_e, self.env.state)
+            times.append(self.env.t)
+            evader_eci.append(np.concatenate((r_e, v_e)))
+            pursuer_eci.append(np.concatenate((r_p, v_p)))
         
         # 배열 변환
         states = np.array(states)
         actions_e = np.array(actions_e)
         actions_p = np.array(actions_p)
+        times = np.array(times)
+        evader_eci = np.array(evader_eci)
+        pursuer_eci = np.array(pursuer_eci)
         
         # 결과 분석
         metrics = self.env.analyze_results(states, actions_e, actions_p)
@@ -200,6 +214,7 @@ class ModelEvaluator:
         scenario_result = {
             'metrics': metrics,
             'trajectory': (states, actions_e, actions_p),
+            'ephemeris_eci': (times, evader_eci, pursuer_eci),
             'rewards': rewards,
             'info': info,
             'step_count': step_count
@@ -299,6 +314,14 @@ class ModelEvaluator:
             safety_info=info.get('safety_score'),
             buffer_time=info.get('buffer_time')
         )
+
+        if 'ephemeris_eci' in scenario_result:
+            t, e_eci, p_eci = scenario_result['ephemeris_eci']
+            plot_eci_trajectories(
+                t, p_eci, e_eci,
+                save_path=f"{save_dir}/test_{scenario_id}_eci",
+                title=f"Test {scenario_id} ECI Trajectory"
+            )
     
     def _save_evaluation_results(self, comprehensive_results: Dict,
                                results: List[Dict],
