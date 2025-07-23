@@ -169,8 +169,14 @@ def plot_training_progress(success_rates: List[float],
     # 4. Nash Equilibrium 메트릭 그래프
     if nash_metrics:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-        eval_episodes = range(0, episode_count, 10)  # 10 에피소드마다 평가 가정
-        plt.plot(eval_episodes[:len(nash_metrics)], nash_metrics, 'b-', linewidth=2)
+        eval_episodes = list(range(0, episode_count, 10))  # 10 에피소드마다 평가 가정
+
+        # eval_episodes와 nash_metrics 길이를 맞추기 위한 처리
+        min_len = min(len(eval_episodes), len(nash_metrics))
+        episodes_to_plot = eval_episodes[:min_len]
+        nash_to_plot = nash_metrics[:min_len]
+
+        plt.plot(episodes_to_plot, nash_to_plot, 'b-', linewidth=2)
         plt.xlabel('Episode')
         plt.ylabel('Nash Equilibrium Metric')
         plt.title('Nash Equilibrium Convergence')
@@ -182,8 +188,8 @@ def plot_training_progress(success_rates: List[float],
         
         # Nash 메트릭 데이터 저장
         nash_data = {
-            'episode': list(eval_episodes[:len(nash_metrics)]),
-            'nash_metric': nash_metrics
+            'episode': episodes_to_plot,
+            'nash_metric': nash_to_plot
         }
         save_data_to_csv(nash_data, f'{save_dir}/nash_metrics.csv')
     
