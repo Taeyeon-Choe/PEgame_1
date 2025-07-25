@@ -336,8 +336,8 @@ def plot_distance_evolution(states: np.ndarray, save_path: Optional[str] = None)
     plt.plot(time_steps, distances, color=PLOT_PARAMS['colors']['trajectory'], linewidth=2)
     plt.axhline(y=1000, color=PLOT_PARAMS['colors']['pursuer'], 
                linestyle='--', label='Capture Distance (1000m)')
-    plt.axhline(y=50000, color=PLOT_PARAMS['colors']['evader'], 
-               linestyle='--', label='Evasion Distance (50000m)')
+    plt.axhline(y=5000, color=PLOT_PARAMS['colors']['evader'], 
+               linestyle='--', label='Evasion Distance (5000m)')
     plt.xlabel('Time Steps')
     plt.ylabel('Distance (m)')
     plt.title('Distance Between Pursuer and Evader')
