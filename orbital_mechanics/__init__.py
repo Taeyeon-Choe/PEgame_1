@@ -9,8 +9,6 @@ from .GimAlfriendSTM import GimAlfriendSTM
 from .dynamics import (
     relative_dynamics_evader_centered,
     compute_j2_differential_acceleration,
-    hcw_dynamics,
-    clohessy_wiltshire_stm,
     atmospheric_drag_acceleration,
     solar_radiation_pressure,
     third_body_acceleration
@@ -30,8 +28,6 @@ __all__ = [
     'ChiefOrbit',
     'relative_dynamics_evader_centered',
     'compute_j2_differential_acceleration', 
-    'hcw_dynamics',
-    'clohessy_wiltshire_stm',
     'atmospheric_drag_acceleration',
     'solar_radiation_pressure',
     'third_body_acceleration',
