@@ -70,9 +70,9 @@ class EvasionTrackingCallback(BaseCallback):
         # 각 환경 처리
         for env_idx, done in enumerate(dones):
             if done:
-                # 'final_info' 키를 확인하여 종료된 에피소드의 실제 정보를 가져옵니다.
-                # 이 정보가 없으면 기존 info를 사용합니다 (단일 환경 호환성).
-                final_info = infos[env_idx].get('final_info')
+                # 'final_info' 키가 있으면 이를 사용하고,
+                # 없으면 현재 info 데이터를 사용해 호환성을 높인다.
+                final_info = infos[env_idx].get('final_info') or infos[env_idx]
                 if final_info:
                     self._process_episode_end(final_info, env_idx)
         
