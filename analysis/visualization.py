@@ -593,7 +593,7 @@ def plot_eci_trajectories(times: np.ndarray,
                           title: str = "ECI Trajectories",
                           show_earth: bool = True,
                           show_stats: bool = True,
-                          use_plotly: bool = False):
+                          use_plotly: bool = True):
     """ECI 프레임 궤적 시각화
 
     각 시각별 위치를 점으로 표시하며, 시간에 따라 색상이 변한다.
