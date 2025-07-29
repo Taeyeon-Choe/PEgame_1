@@ -620,32 +620,36 @@ def plot_eci_trajectories(times: np.ndarray,
     cmap_evader = plt.get_cmap('Blues')
     cmap_pursuer = plt.get_cmap('Reds')
 
-    # 각 시점의 실제 데이터를 점으로 표시 (선 연결 없음)
+    # 각 시점의 실제 데이터를 점으로 표시 (원 모양으로 통일)
     sc_evader = ax.scatter(
         evader_states[:, 0], evader_states[:, 1], evader_states[:, 2],
-        c=times, cmap=cmap_evader, norm=norm, s=20, marker='o', alpha=0.8
+        c=times, cmap=cmap_evader, norm=norm, s=15, marker='o', alpha=0.8  # marker='o'로 변경, 크기 조정
     )
     sc_pursuer = ax.scatter(
         pursuer_states[:, 0], pursuer_states[:, 1], pursuer_states[:, 2],
-        c=times, cmap=cmap_pursuer, norm=norm, s=20, marker='^', alpha=0.8
+        c=times, cmap=cmap_pursuer, norm=norm, s=15, marker='o', alpha=0.8  # marker='o'로 변경, 크기 조정
     )
     
-    # 시작점과 끝점 표시
+    # 시작점과 끝점 표시 - 시각적 구분 강화
+    # Evader 시작점 - 크고 진한 파란색 사각형
     ax.scatter(
         evader_states[0, 0], evader_states[0, 1], evader_states[0, 2],
-        c=[cmap_evader(0.8)], s=100, marker='s'
+        c='darkblue', s=200, marker='s', edgecolors='white', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
+    # Evader 끝점 - 크고 연한 파란색 X
     ax.scatter(
         evader_states[-1, 0], evader_states[-1, 1], evader_states[-1, 2],
-        c=[cmap_evader(0.2)], s=100, marker='X'
+        c='lightblue', s=200, marker='X', edgecolors='darkblue', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
+    # Pursuer 시작점 - 크고 진한 빨간색 다이아몬드
     ax.scatter(
         pursuer_states[0, 0], pursuer_states[0, 1], pursuer_states[0, 2],
-        c=[cmap_pursuer(0.8)], s=100, marker='D'
+        c='darkred', s=200, marker='D', edgecolors='white', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
+    # Pursuer 끝점 - 크고 연한 빨간색 별
     ax.scatter(
         pursuer_states[-1, 0], pursuer_states[-1, 1], pursuer_states[-1, 2],
-        c=[cmap_pursuer(0.2)], s=100, marker='*'
+        c='lightcoral', s=200, marker='*', edgecolors='darkred', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
     
     # 지구 표시
@@ -747,6 +751,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
 
     fig = go.Figure()
 
+    # 기본 궤적 - 원 모양의 점들로 표시
     fig.add_trace(
         go.Scatter3d(
             x=evader_states[:, 0],
@@ -754,11 +759,12 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=evader_states[:, 2],
             mode="markers",
             marker=dict(
-                size=4,
+                size=3,  # 크기 약간 감소
                 color=norm_times,
                 colorscale="Blues",
                 showscale=True,
-                colorbar=dict(title="Time (s)")
+                colorbar=dict(title="Time (s)"),
+                symbol="circle"  # 명시적으로 원 모양 지정
             ),
             name="Evader",
         )
@@ -771,53 +777,81 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=pursuer_states[:, 2],
             mode="markers",
             marker=dict(
-                size=4,
+                size=3,  # 크기 약간 감소
                 color=norm_times,
                 colorscale="Reds",
-                showscale=False
+                showscale=False,
+                symbol="circle"  # 명시적으로 원 모양 지정
             ),
             name="Pursuer",
         )
     )
 
-    # 시작과 끝 표시
+    # 시작과 끝 표시 - 시각적 구분 강화
+    # Evader 시작점 - 크고 진한 파란색 사각형
     fig.add_trace(
         go.Scatter3d(
             x=[evader_states[0, 0]],
             y=[evader_states[0, 1]],
             z=[evader_states[0, 2]],
             mode="markers",
-            marker=dict(size=6, color="blue", symbol="square"),
+            marker=dict(
+                size=12,  # 크기 증가
+                color="darkblue",  # 진한 파란색
+                symbol="square",
+                line=dict(color="white", width=2)  # 흰색 테두리 추가
+            ),
             name="Evader Start",
         )
     )
+    
+    # Evader 끝점 - 크고 연한 파란색 X 표시
     fig.add_trace(
         go.Scatter3d(
             x=[evader_states[-1, 0]],
             y=[evader_states[-1, 1]],
             z=[evader_states[-1, 2]],
             mode="markers",
-            marker=dict(size=6, color="blue", symbol="x"),
+            marker=dict(
+                size=12,  # 크기 증가
+                color="lightblue",  # 연한 파란색
+                symbol="x",
+                line=dict(color="darkblue", width=2)  # 진한 파란색 테두리
+            ),
             name="Evader End",
         )
     )
+    
+    # Pursuer 시작점 - 크고 진한 빨간색 다이아몬드
     fig.add_trace(
         go.Scatter3d(
             x=[pursuer_states[0, 0]],
             y=[pursuer_states[0, 1]],
             z=[pursuer_states[0, 2]],
             mode="markers",
-            marker=dict(size=6, color="red", symbol="diamond"),
+            marker=dict(
+                size=12,  # 크기 증가
+                color="darkred",  # 진한 빨간색
+                symbol="diamond",
+                line=dict(color="white", width=2)  # 흰색 테두리 추가
+            ),
             name="Pursuer Start",
         )
     )
+    
+    # Pursuer 끝점 - 크고 연한 빨간색 십자가 표시
     fig.add_trace(
         go.Scatter3d(
             x=[pursuer_states[-1, 0]],
             y=[pursuer_states[-1, 1]],
             z=[pursuer_states[-1, 2]],
             mode="markers",
-            marker=dict(size=6, color="red", symbol="star"),
+            marker=dict(
+                size=12,  # 크기 증가
+                color="lightcoral",  # 연한 빨간색
+                symbol="cross",  # 'star' 대신 'cross' 사용
+                line=dict(color="darkred", width=2)  # 진한 빨간색 테두리
+            ),
             name="Pursuer End",
         )
     )
@@ -829,7 +863,15 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
         y_earth = 6371e3 * np.outer(np.sin(u), np.sin(v))
         z_earth = 6371e3 * np.outer(np.ones(np.size(u)), np.cos(v))
         fig.add_trace(
-            go.Surface(x=x_earth, y=y_earth, z=z_earth, opacity=0.3, showscale=False, colorscale=[[0, "lightblue"], [1, "lightblue"]])
+            go.Surface(
+                x=x_earth, 
+                y=y_earth, 
+                z=z_earth, 
+                opacity=0.3, 
+                showscale=False, 
+                colorscale=[[0, "lightblue"], [1, "lightblue"]],
+                name="Earth"
+            )
         )
 
     fig.update_layout(
@@ -840,7 +882,14 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             zaxis_title="Z (m)",
             aspectmode="data",
         ),
-        legend=dict(itemsizing="constant"),
+        legend=dict(
+            itemsizing="constant",
+            x=0.02,
+            y=0.98,
+            bgcolor="rgba(255, 255, 255, 0.8)",
+            bordercolor="Black",
+            borderwidth=1
+        ),
         margin=dict(l=0, r=0, b=0, t=50),
     )
 
@@ -849,22 +898,37 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
         final_dist = np.linalg.norm(evader_states[-1, :3] - pursuer_states[-1, :3])
         evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6371e3
         pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6371e3
+        
         textstr = f"Initial Distance: {initial_dist/1000:.1f} km<br>"
         textstr += f"Final Distance: {final_dist/1000:.1f} km<br>"
         textstr += f"Duration: {times[-1]/60:.1f} min<br>"
         textstr += f"Avg Altitude: E={evader_alt/1000:.0f} km, P={pursuer_alt/1000:.0f} km"
+        
         fig.add_annotation(
-            x=0.0,
-            y=1.0,
+            x=0.02,
+            y=0.02,
             xref="paper",
             yref="paper",
             showarrow=False,
             align="left",
             text=textstr,
+            bgcolor="rgba(255, 255, 255, 0.8)",
+            bordercolor="black",
+            borderwidth=1,
+            font=dict(size=12)
         )
 
     if save_path:
         fig.write_html(f"{save_path}_eci.html")
+        
+        # 데이터도 저장
+        ephemeris_data = {
+            't': times.tolist(),
+            'evader': evader_states.tolist(),
+            'pursuer': pursuer_states.tolist()
+        }
+        with open(f"{save_path}_eci.json", 'w') as f:
+            json.dump(ephemeris_data, f, indent=2)
 
     return fig
 
