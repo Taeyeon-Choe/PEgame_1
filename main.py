@@ -275,13 +275,31 @@ def interactive_mode():
             
             n_tests = input("테스트 수 (기본값: 10): ").strip()
             n_tests = int(n_tests) if n_tests else 10
-            
+
             # 평가 시에도 GA-STM 옵션 제공
             use_gastm = input("평가 시 GA-STM 사용? (y/n, 기본값: n): ").strip().lower()
-            
+
             config = get_config(experiment_name="interactive_evaluation")
             config.environment.use_gastm = use_gastm == 'y'
-            
+
+            # Delta-V 설정 입력
+            delta_v_emax = input(
+                f"회피자 최대 Delta-V (기본값: {config.environment.delta_v_emax} m/s): "
+            ).strip()
+            if delta_v_emax:
+                config.environment.delta_v_emax = float(delta_v_emax)
+
+            delta_v_pmax = input(
+                f"추격자 최대 Delta-V (기본값: {config.environment.delta_v_pmax} m/s): "
+            ).strip()
+            if delta_v_pmax:
+                config.environment.delta_v_pmax = float(delta_v_pmax)
+
+            print("\n평가 설정:")
+            print(f"  GA-STM 사용: {config.environment.use_gastm}")
+            print(f"  회피자 최대 Delta-V: {config.environment.delta_v_emax} m/s")
+            print(f"  추격자 최대 Delta-V: {config.environment.delta_v_pmax} m/s")
+
             evaluate_model(model_path, config, n_tests)
             
         elif choice == '3' or choice == 'demo':

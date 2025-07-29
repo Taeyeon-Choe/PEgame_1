@@ -321,6 +321,24 @@ class ModelEvaluator:
                 save_path=f"{save_dir}/test_{scenario_id}_eci",
                 title=f"Test {scenario_id} ECI Trajectory"
             )
+
+        # Delta-V 기록 저장
+        if 'ephemeris_eci' in scenario_result:
+            times = scenario_result['ephemeris_eci'][0]
+        else:
+            times = np.arange(len(actions_e)) * self.env.dt
+
+        delta_v_data = {
+            'time': times.tolist(),
+            'evader_delta_v': actions_e.tolist(),
+            'evader_delta_v_norm': np.linalg.norm(actions_e, axis=1).tolist(),
+            'pursuer_delta_v': actions_p.tolist(),
+            'pursuer_delta_v_norm': np.linalg.norm(actions_p, axis=1).tolist(),
+        }
+
+        with open(f"{save_dir}/test_{scenario_id}_delta_v.json", "w") as f:
+            import json
+            json.dump(delta_v_data, f, indent=2)
     
     def _save_evaluation_results(self, comprehensive_results: Dict,
                                results: List[Dict],
@@ -385,7 +403,11 @@ class ModelEvaluator:
         with open(f"{save_dir}/detailed_results.txt", "w") as f:
             for i, result in enumerate(results):
                 f.write(f"\n=== 테스트 {i+1} ===\n")
+                seen = set()
                 for key, value in result.items():
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     f.write(f"{key}: {value}\n")
     
     def _save_zero_sum_metrics(self, zero_sum_metrics: Dict, save_dir: str):
