@@ -6,7 +6,8 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # GUI 없는 환경에서 사용
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+from mpl_toolkits.mplot3d import Axes3D, art3d
+from matplotlib.lines import Line2D
 from typing import List, Dict, Optional, Tuple, Any
 import os
 import json
@@ -590,24 +591,62 @@ def plot_eci_trajectories(times: np.ndarray,
                           evader_states: np.ndarray,
                           save_path: Optional[str] = None,
                           title: str = "ECI Trajectories",
-                          show_earth: bool = True, 
-                          show_stats: bool = True):
-    """ECI 프레임 궤적 시각화"""
+                          show_earth: bool = True,
+                          show_stats: bool = True,
+                          use_plotly: bool = False):
+    """ECI 프레임 궤적 시각화
+
+    각 시각별 위치를 점으로 표시하며, 시간에 따라 색상이 변한다.
+    Pursuer는 적색 스펙트럼, Evader는 청색 스펙트럼을 사용한다.
+    ``use_plotly``가 ``True``이면 Plotly 기반 인터랙티브 HTML을 생성한다.
+    """
+    if use_plotly:
+        return _plot_eci_trajectories_plotly(
+            times,
+            pursuer_states,
+            evader_states,
+            save_path=save_path,
+            title=title,
+            show_earth=show_earth,
+            show_stats=show_stats,
+        )
+
     setup_matplotlib()
     fig = plt.figure(figsize=PLOT_PARAMS['figure_size_3d'])
     ax = fig.add_subplot(111, projection='3d')
-    
-    # 궤적 플롯
-    ax.plot(evader_states[:, 0], evader_states[:, 1], evader_states[:, 2],
-            color=PLOT_PARAMS['colors']['evader'], label='Evader', linewidth=2)
-    ax.plot(pursuer_states[:, 0], pursuer_states[:, 1], pursuer_states[:, 2],
-            color=PLOT_PARAMS['colors']['pursuer'], label='Pursuer', linewidth=2)
+
+    # 시간에 따른 색상 매핑 준비
+    norm = plt.Normalize(times.min(), times.max())
+    cmap_evader = plt.get_cmap('Blues')
+    cmap_pursuer = plt.get_cmap('Reds')
+
+    # 각 시점의 실제 데이터를 점으로 표시 (선 연결 없음)
+    sc_evader = ax.scatter(
+        evader_states[:, 0], evader_states[:, 1], evader_states[:, 2],
+        c=times, cmap=cmap_evader, norm=norm, s=20, marker='o', alpha=0.8
+    )
+    sc_pursuer = ax.scatter(
+        pursuer_states[:, 0], pursuer_states[:, 1], pursuer_states[:, 2],
+        c=times, cmap=cmap_pursuer, norm=norm, s=20, marker='^', alpha=0.8
+    )
     
     # 시작점과 끝점 표시
-    ax.scatter(evader_states[0, 0], evader_states[0, 1], evader_states[0, 2], 
-               c='green', s=100, marker='o', label='Start')
-    ax.scatter(evader_states[-1, 0], evader_states[-1, 1], evader_states[-1, 2], 
-               c='red', s=100, marker='*', label='End')
+    ax.scatter(
+        evader_states[0, 0], evader_states[0, 1], evader_states[0, 2],
+        c=[cmap_evader(0.8)], s=100, marker='s'
+    )
+    ax.scatter(
+        evader_states[-1, 0], evader_states[-1, 1], evader_states[-1, 2],
+        c=[cmap_evader(0.2)], s=100, marker='X'
+    )
+    ax.scatter(
+        pursuer_states[0, 0], pursuer_states[0, 1], pursuer_states[0, 2],
+        c=[cmap_pursuer(0.8)], s=100, marker='D'
+    )
+    ax.scatter(
+        pursuer_states[-1, 0], pursuer_states[-1, 1], pursuer_states[-1, 2],
+        c=[cmap_pursuer(0.2)], s=100, marker='*'
+    )
     
     # 지구 표시
     if show_earth:
@@ -623,15 +662,30 @@ def plot_eci_trajectories(times: np.ndarray,
     ax.set_ylabel('Y (m)')
     ax.set_zlabel('Z (m)')
     ax.set_title(title)
-    ax.legend()
     ax.grid(True, alpha=0.3)
-    
+
     # 축 범위 설정
     combined = np.vstack((evader_states[:, :3], pursuer_states[:, :3]))
     max_range = np.max(np.abs(combined)) * 1.1  # 10% 여유
     ax.set_xlim(-max_range, max_range)
     ax.set_ylim(-max_range, max_range)
     ax.set_zlim(-max_range, max_range)
+
+    # 컬러바 및 범례
+    cbar = fig.colorbar(sc_evader, ax=ax, pad=0.1)
+    cbar.set_label('Time (s)')
+
+    handles = [
+        Line2D([0], [0], marker='s', color='w', markerfacecolor=cmap_evader(0.8),
+               markersize=8, label='Evader Start'),
+        Line2D([0], [0], marker='X', color='w', markerfacecolor=cmap_evader(0.2),
+               markersize=8, label='Evader End'),
+        Line2D([0], [0], marker='D', color='w', markerfacecolor=cmap_pursuer(0.8),
+               markersize=8, label='Pursuer Start'),
+        Line2D([0], [0], marker='*', color='w', markerfacecolor=cmap_pursuer(0.2),
+               markersize=10, label='Pursuer End'),
+    ]
+    ax.legend(handles=handles, loc='best')
     
     # 통계 정보 표시
     if show_stats:
@@ -673,6 +727,146 @@ def plot_eci_trajectories(times: np.ndarray,
         plt.close()
     else:
         plt.show()  # save_path가 없으면 화면에 표시
+
+
+def _plot_eci_trajectories_plotly(times: np.ndarray,
+                                  pursuer_states: np.ndarray,
+                                  evader_states: np.ndarray,
+                                  save_path: Optional[str] = None,
+                                  title: str = "ECI Trajectories",
+                                  show_earth: bool = True,
+                                  show_stats: bool = True):
+    """Plotly를 이용한 인터랙티브 ECI 궤적 시각화
+
+    Pursuer는 적색, Evader는 청색 스펙트럼을 사용하여 점을 표시한다.
+    시작과 끝 지점은 각각 별도의 모양으로 강조된다.
+    """
+    import plotly.graph_objects as go
+
+    norm_times = (times - times.min()) / (times.max() - times.min())
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=evader_states[:, 0],
+            y=evader_states[:, 1],
+            z=evader_states[:, 2],
+            mode="markers",
+            marker=dict(
+                size=4,
+                color=norm_times,
+                colorscale="Blues",
+                showscale=True,
+                colorbar=dict(title="Time (s)")
+            ),
+            name="Evader",
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter3d(
+            x=pursuer_states[:, 0],
+            y=pursuer_states[:, 1],
+            z=pursuer_states[:, 2],
+            mode="markers",
+            marker=dict(
+                size=4,
+                color=norm_times,
+                colorscale="Reds",
+                showscale=False
+            ),
+            name="Pursuer",
+        )
+    )
+
+    # 시작과 끝 표시
+    fig.add_trace(
+        go.Scatter3d(
+            x=[evader_states[0, 0]],
+            y=[evader_states[0, 1]],
+            z=[evader_states[0, 2]],
+            mode="markers",
+            marker=dict(size=6, color="blue", symbol="square"),
+            name="Evader Start",
+        )
+    )
+    fig.add_trace(
+        go.Scatter3d(
+            x=[evader_states[-1, 0]],
+            y=[evader_states[-1, 1]],
+            z=[evader_states[-1, 2]],
+            mode="markers",
+            marker=dict(size=6, color="blue", symbol="x"),
+            name="Evader End",
+        )
+    )
+    fig.add_trace(
+        go.Scatter3d(
+            x=[pursuer_states[0, 0]],
+            y=[pursuer_states[0, 1]],
+            z=[pursuer_states[0, 2]],
+            mode="markers",
+            marker=dict(size=6, color="red", symbol="diamond"),
+            name="Pursuer Start",
+        )
+    )
+    fig.add_trace(
+        go.Scatter3d(
+            x=[pursuer_states[-1, 0]],
+            y=[pursuer_states[-1, 1]],
+            z=[pursuer_states[-1, 2]],
+            mode="markers",
+            marker=dict(size=6, color="red", symbol="star"),
+            name="Pursuer End",
+        )
+    )
+
+    if show_earth:
+        u = np.linspace(0, 2 * np.pi, 30)
+        v = np.linspace(0, np.pi, 20)
+        x_earth = 6371e3 * np.outer(np.cos(u), np.sin(v))
+        y_earth = 6371e3 * np.outer(np.sin(u), np.sin(v))
+        z_earth = 6371e3 * np.outer(np.ones(np.size(u)), np.cos(v))
+        fig.add_trace(
+            go.Surface(x=x_earth, y=y_earth, z=z_earth, opacity=0.3, showscale=False, colorscale=[[0, "lightblue"], [1, "lightblue"]])
+        )
+
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title="X (m)",
+            yaxis_title="Y (m)",
+            zaxis_title="Z (m)",
+            aspectmode="data",
+        ),
+        legend=dict(itemsizing="constant"),
+        margin=dict(l=0, r=0, b=0, t=50),
+    )
+
+    if show_stats:
+        initial_dist = np.linalg.norm(evader_states[0, :3] - pursuer_states[0, :3])
+        final_dist = np.linalg.norm(evader_states[-1, :3] - pursuer_states[-1, :3])
+        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6371e3
+        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6371e3
+        textstr = f"Initial Distance: {initial_dist/1000:.1f} km<br>"
+        textstr += f"Final Distance: {final_dist/1000:.1f} km<br>"
+        textstr += f"Duration: {times[-1]/60:.1f} min<br>"
+        textstr += f"Avg Altitude: E={evader_alt/1000:.0f} km, P={pursuer_alt/1000:.0f} km"
+        fig.add_annotation(
+            x=0.0,
+            y=1.0,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            align="left",
+            text=textstr,
+        )
+
+    if save_path:
+        fig.write_html(f"{save_path}_eci.html")
+
+    return fig
 
 def numpy_to_python(obj):
     """NumPy 타입을 Python 기본 타입으로 변환"""
