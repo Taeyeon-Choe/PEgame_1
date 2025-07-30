@@ -158,7 +158,7 @@ class PursuitEvasionEnv(gym.Env):
         self.steps_per_orbit = int(self.orbital_period / self.dt)
         
         # 궤도별 모드 설정 (1궤도: 게임, 2궤도: 관찰, 3궤도: 게임)
-        self.orbit_modes = ['game', 'observe', 'game']
+        self.orbit_modes = ['game', 'game', 'game']
         
         # 궤도별 버퍼 크기 재설정
         self.orbital_buffer_capture = max(int(0.5 * self.orbital_period / self.dt), 10)  # 0.5 궤도
