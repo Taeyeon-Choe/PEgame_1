@@ -623,43 +623,43 @@ def plot_eci_trajectories(times: np.ndarray,
     # 각 시점의 실제 데이터를 점으로 표시 (원 모양으로 통일)
     sc_evader = ax.scatter(
         evader_states[:, 0], evader_states[:, 1], evader_states[:, 2],
-        c=times, cmap=cmap_evader, norm=norm, s=15, marker='o', alpha=0.8  # marker='o'로 변경, 크기 조정
+        c=times, cmap=cmap_evader, norm=norm, s=8, marker='o', alpha=0.8  # marker='o'로 변경, 크기 조정
     )
     sc_pursuer = ax.scatter(
         pursuer_states[:, 0], pursuer_states[:, 1], pursuer_states[:, 2],
-        c=times, cmap=cmap_pursuer, norm=norm, s=15, marker='o', alpha=0.8  # marker='o'로 변경, 크기 조정
+        c=times, cmap=cmap_pursuer, norm=norm, s=8, marker='o', alpha=0.8  # marker='o'로 변경, 크기 조정
     )
     
     # 시작점과 끝점 표시 - 시각적 구분 강화
     # Evader 시작점 - 크고 진한 파란색 사각형
     ax.scatter(
         evader_states[0, 0], evader_states[0, 1], evader_states[0, 2],
-        c='darkblue', s=200, marker='s', edgecolors='white', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
+        c='darkblue', s=100, marker='s', edgecolors='white', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
     # Evader 끝점 - 크고 연한 파란색 X
     ax.scatter(
         evader_states[-1, 0], evader_states[-1, 1], evader_states[-1, 2],
-        c='lightblue', s=200, marker='X', edgecolors='darkblue', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
+        c='lightblue', s=100, marker='X', edgecolors='darkblue', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
     # Pursuer 시작점 - 크고 진한 빨간색 다이아몬드
     ax.scatter(
         pursuer_states[0, 0], pursuer_states[0, 1], pursuer_states[0, 2],
-        c='darkred', s=200, marker='D', edgecolors='white', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
+        c='darkred', s=100, marker='D', edgecolors='white', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
     # Pursuer 끝점 - 크고 연한 빨간색 별
     ax.scatter(
         pursuer_states[-1, 0], pursuer_states[-1, 1], pursuer_states[-1, 2],
-        c='lightcoral', s=200, marker='*', edgecolors='darkred', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
+        c='lightcoral', s=100, marker='*', edgecolors='darkred', linewidth=2  # 크기 증가, 색상 변경, 테두리 추가
     )
     
     # 지구 표시
     if show_earth:
         u = np.linspace(0, 2 * np.pi, 30)
         v = np.linspace(0, np.pi, 20)
-        x_earth = 6371e3 * np.outer(np.cos(u), np.sin(v))  # 미터 단위
-        y_earth = 6371e3 * np.outer(np.sin(u), np.sin(v))
-        z_earth = 6371e3 * np.outer(np.ones(np.size(u)), np.cos(v))
-        ax.plot_surface(x_earth, y_earth, z_earth, color='lightblue', alpha=0.3)
+        x_earth = 6378e3 * np.outer(np.cos(u), np.sin(v))  # 미터 단위
+        y_earth = 6378e3 * np.outer(np.sin(u), np.sin(v))
+        z_earth = 6378e3 * np.outer(np.ones(np.size(u)), np.cos(v))
+        ax.plot_surface(x_earth, y_earth, z_earth, color='grey', alpha=0.3)
     
     # 축 설정
     ax.set_xlabel('X (m)')
@@ -698,8 +698,8 @@ def plot_eci_trajectories(times: np.ndarray,
         final_dist = np.linalg.norm(evader_states[-1, :3] - pursuer_states[-1, :3])
         
         # 평균 고도
-        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6371e3
-        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6371e3
+        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6378e3
+        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6378e3
         
         textstr = f'Initial Distance: {initial_dist/1000:.1f} km\n'
         textstr += f'Final Distance: {final_dist/1000:.1f} km\n'
@@ -759,7 +759,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=evader_states[:, 2],
             mode="markers",
             marker=dict(
-                size=3,  # 크기 약간 감소
+                size=2,  # 크기 약간 감소
                 color=norm_times,
                 colorscale="Blues",
                 showscale=True,
@@ -777,7 +777,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=pursuer_states[:, 2],
             mode="markers",
             marker=dict(
-                size=3,  # 크기 약간 감소
+                size=2,  # 크기 약간 감소
                 color=norm_times,
                 colorscale="Reds",
                 showscale=False,
@@ -859,9 +859,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     if show_earth:
         u = np.linspace(0, 2 * np.pi, 30)
         v = np.linspace(0, np.pi, 20)
-        x_earth = 6371e3 * np.outer(np.cos(u), np.sin(v))
-        y_earth = 6371e3 * np.outer(np.sin(u), np.sin(v))
-        z_earth = 6371e3 * np.outer(np.ones(np.size(u)), np.cos(v))
+        x_earth = 6378e3 * np.outer(np.cos(u), np.sin(v))
+        y_earth = 6378e3 * np.outer(np.sin(u), np.sin(v))
+        z_earth = 6378e3 * np.outer(np.ones(np.size(u)), np.cos(v))
         fig.add_trace(
             go.Surface(
                 x=x_earth, 
@@ -896,8 +896,8 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     if show_stats:
         initial_dist = np.linalg.norm(evader_states[0, :3] - pursuer_states[0, :3])
         final_dist = np.linalg.norm(evader_states[-1, :3] - pursuer_states[-1, :3])
-        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6371e3
-        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6371e3
+        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6378e3
+        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6378e3
         
         textstr = f"Initial Distance: {initial_dist/1000:.1f} km<br>"
         textstr += f"Final Distance: {final_dist/1000:.1f} km<br>"
