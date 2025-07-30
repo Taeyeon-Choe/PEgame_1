@@ -747,16 +747,19 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     """
     import plotly.graph_objects as go
 
+    # Plotly에서는 km 단위로 시각화하기 위해 좌표를 변환한다
+    evader_states_km = evader_states / 1000.0
+    pursuer_states_km = pursuer_states / 1000.0
     norm_times = (times - times.min()) / (times.max() - times.min())
 
     fig = go.Figure()
 
-    # 기본 궤적 - 원 모양의 점들로 표시
+    # 기본 궤적 - 원 모양의 점들로 표시 (km 단위)
     fig.add_trace(
         go.Scatter3d(
-            x=evader_states[:, 0],
-            y=evader_states[:, 1],
-            z=evader_states[:, 2],
+            x=evader_states_km[:, 0],
+            y=evader_states_km[:, 1],
+            z=evader_states_km[:, 2],
             mode="markers",
             marker=dict(
                 size=2,  # 크기 약간 감소
@@ -772,9 +775,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
 
     fig.add_trace(
         go.Scatter3d(
-            x=pursuer_states[:, 0],
-            y=pursuer_states[:, 1],
-            z=pursuer_states[:, 2],
+            x=pursuer_states_km[:, 0],
+            y=pursuer_states_km[:, 1],
+            z=pursuer_states_km[:, 2],
             mode="markers",
             marker=dict(
                 size=2,  # 크기 약간 감소
@@ -791,9 +794,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     # Evader 시작점 - 크고 진한 파란색 사각형
     fig.add_trace(
         go.Scatter3d(
-            x=[evader_states[0, 0]],
-            y=[evader_states[0, 1]],
-            z=[evader_states[0, 2]],
+            x=[evader_states_km[0, 0]],
+            y=[evader_states_km[0, 1]],
+            z=[evader_states_km[0, 2]],
             mode="markers",
             marker=dict(
                 size=12,  # 크기 증가
@@ -808,9 +811,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     # Evader 끝점 - 크고 연한 파란색 X 표시
     fig.add_trace(
         go.Scatter3d(
-            x=[evader_states[-1, 0]],
-            y=[evader_states[-1, 1]],
-            z=[evader_states[-1, 2]],
+            x=[evader_states_km[-1, 0]],
+            y=[evader_states_km[-1, 1]],
+            z=[evader_states_km[-1, 2]],
             mode="markers",
             marker=dict(
                 size=12,  # 크기 증가
@@ -825,9 +828,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     # Pursuer 시작점 - 크고 진한 빨간색 다이아몬드
     fig.add_trace(
         go.Scatter3d(
-            x=[pursuer_states[0, 0]],
-            y=[pursuer_states[0, 1]],
-            z=[pursuer_states[0, 2]],
+            x=[pursuer_states_km[0, 0]],
+            y=[pursuer_states_km[0, 1]],
+            z=[pursuer_states_km[0, 2]],
             mode="markers",
             marker=dict(
                 size=12,  # 크기 증가
@@ -842,9 +845,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     # Pursuer 끝점 - 크고 연한 빨간색 십자가 표시
     fig.add_trace(
         go.Scatter3d(
-            x=[pursuer_states[-1, 0]],
-            y=[pursuer_states[-1, 1]],
-            z=[pursuer_states[-1, 2]],
+            x=[pursuer_states_km[-1, 0]],
+            y=[pursuer_states_km[-1, 1]],
+            z=[pursuer_states_km[-1, 2]],
             mode="markers",
             marker=dict(
                 size=12,  # 크기 증가
@@ -859,9 +862,10 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     if show_earth:
         u = np.linspace(0, 2 * np.pi, 30)
         v = np.linspace(0, np.pi, 20)
-        x_earth = 6378e3 * np.outer(np.cos(u), np.sin(v))
-        y_earth = 6378e3 * np.outer(np.sin(u), np.sin(v))
-        z_earth = 6378e3 * np.outer(np.ones(np.size(u)), np.cos(v))
+        # 지구 반지름을 km 단위로 사용
+        x_earth = 6378 * np.outer(np.cos(u), np.sin(v))
+        y_earth = 6378 * np.outer(np.sin(u), np.sin(v))
+        z_earth = 6378 * np.outer(np.ones(np.size(u)), np.cos(v))
         fig.add_trace(
             go.Surface(
                 x=x_earth, 
@@ -877,9 +881,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     fig.update_layout(
         title=title,
         scene=dict(
-            xaxis_title="X (m)",
-            yaxis_title="Y (m)",
-            zaxis_title="Z (m)",
+            xaxis_title="X (km)",
+            yaxis_title="Y (km)",
+            zaxis_title="Z (km)",
             aspectmode="data",
         ),
         legend=dict(
