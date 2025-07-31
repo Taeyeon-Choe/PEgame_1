@@ -750,8 +750,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     # Plotly에서는 km 단위로 시각화하기 위해 좌표를 변환한다
     evader_states_km = evader_states / 1000.0
     pursuer_states_km = pursuer_states / 1000.0
-    # 시간 정보는 그대로 사용하며 색상 범위는 전체 시간 구간에 맞춘다
-    time_values = times.astype(float)
+    # 시간 정보는 초 단위로 보존하고 색상 표시는 분 단위로 변환한다
+    time_values_sec = times.astype(float)
+    time_values_min = time_values_sec / 60.0
 
     fig = go.Figure()
 
@@ -764,17 +765,22 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             mode="markers",
             marker=dict(
                 size=2,  # 크기 약간 감소
-                color=time_values,
+                color=time_values_min,
                 colorscale="Blues",
                 showscale=True,
-                colorbar=dict(title="Time (s)", x=1.0),
-                cmin=time_values.min(),
-                cmax=time_values.max(),
+                colorbar=dict(title="Time (min)", x=1.0),
+                cmin=time_values_min.min(),
+                cmax=time_values_min.max(),
                 symbol="circle"  # 명시적으로 원 모양 지정
             ),
             name="Evader",
-            customdata=time_values,
-            hovertemplate="Time: %{customdata:.2f}s<extra></extra>",
+            customdata=np.column_stack((evader_states_km[:, 0], evader_states_km[:, 1], evader_states_km[:, 2], time_values_sec)),
+            hovertemplate=(
+                "x: %{customdata[0]:.2f} km<br>" +
+                "y: %{customdata[1]:.2f} km<br>" +
+                "z: %{customdata[2]:.2f} km<br>" +
+                "t: %{customdata[3]:.2f}s<extra></extra>"
+            ),
         )
     )
 
@@ -786,17 +792,22 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             mode="markers",
             marker=dict(
                 size=2,  # 크기 약간 감소
-                color=time_values,
+                color=time_values_min,
                 colorscale="Reds",
                 showscale=True,
-                colorbar=dict(title="Time (s)", x=1.05),
-                cmin=time_values.min(),
-                cmax=time_values.max(),
+                colorbar=dict(title="Time (min)", x=1.05),
+                cmin=time_values_min.min(),
+                cmax=time_values_min.max(),
                 symbol="circle"  # 명시적으로 원 모양 지정
             ),
             name="Pursuer",
-            customdata=time_values,
-            hovertemplate="Time: %{customdata:.2f}s<extra></extra>",
+            customdata=np.column_stack((pursuer_states_km[:, 0], pursuer_states_km[:, 1], pursuer_states_km[:, 2], time_values_sec)),
+            hovertemplate=(
+                "x: %{customdata[0]:.2f} km<br>" +
+                "y: %{customdata[1]:.2f} km<br>" +
+                "z: %{customdata[2]:.2f} km<br>" +
+                "t: %{customdata[3]:.2f}s<extra></extra>"
+            ),
         )
     )
 
@@ -815,8 +826,13 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
                 line=dict(color="white", width=2)  # 흰색 테두리 추가
             ),
             name="Evader Start",
-            customdata=[time_values[0]],
-            hovertemplate="Time: %{customdata:.2f}s<extra></extra>",
+            customdata=[[evader_states_km[0, 0], evader_states_km[0, 1], evader_states_km[0, 2], time_values_sec[0]]],
+            hovertemplate=(
+                "x: %{customdata[0]:.2f} km<br>" +
+                "y: %{customdata[1]:.2f} km<br>" +
+                "z: %{customdata[2]:.2f} km<br>" +
+                "t: %{customdata[3]:.2f}s<extra></extra>"
+            ),
         )
     )
     
@@ -834,8 +850,13 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
                 line=dict(color="darkblue", width=2)  # 진한 파란색 테두리
             ),
             name="Evader End",
-            customdata=[time_values[-1]],
-            hovertemplate="Time: %{customdata:.2f}s<extra></extra>",
+            customdata=[[evader_states_km[-1, 0], evader_states_km[-1, 1], evader_states_km[-1, 2], time_values_sec[-1]]],
+            hovertemplate=(
+                "x: %{customdata[0]:.2f} km<br>" +
+                "y: %{customdata[1]:.2f} km<br>" +
+                "z: %{customdata[2]:.2f} km<br>" +
+                "t: %{customdata[3]:.2f}s<extra></extra>"
+            ),
         )
     )
     
@@ -853,8 +874,13 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
                 line=dict(color="white", width=2)  # 흰색 테두리 추가
             ),
             name="Pursuer Start",
-            customdata=[time_values[0]],
-            hovertemplate="Time: %{customdata:.2f}s<extra></extra>",
+            customdata=[[pursuer_states_km[0, 0], pursuer_states_km[0, 1], pursuer_states_km[0, 2], time_values_sec[0]]],
+            hovertemplate=(
+                "x: %{customdata[0]:.2f} km<br>" +
+                "y: %{customdata[1]:.2f} km<br>" +
+                "z: %{customdata[2]:.2f} km<br>" +
+                "t: %{customdata[3]:.2f}s<extra></extra>"
+            ),
         )
     )
     
@@ -872,8 +898,13 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
                 line=dict(color="darkred", width=2)  # 진한 빨간색 테두리
             ),
             name="Pursuer End",
-            customdata=[time_values[-1]],
-            hovertemplate="Time: %{customdata:.2f}s<extra></extra>",
+            customdata=[[pursuer_states_km[-1, 0], pursuer_states_km[-1, 1], pursuer_states_km[-1, 2], time_values_sec[-1]]],
+            hovertemplate=(
+                "x: %{customdata[0]:.2f} km<br>" +
+                "y: %{customdata[1]:.2f} km<br>" +
+                "z: %{customdata[2]:.2f} km<br>" +
+                "t: %{customdata[3]:.2f}s<extra></extra>"
+            ),
         )
     )
 
