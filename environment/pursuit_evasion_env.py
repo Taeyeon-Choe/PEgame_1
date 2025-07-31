@@ -11,7 +11,13 @@ import gym
 from gym import spaces
 from typing import Dict, Tuple, Any, Optional
 
-from utils.constants import MU_EARTH, ENV_PARAMS, BUFFER_PARAMS, SAFETY_THRESHOLDS
+from utils.constants import (
+    MU_EARTH,
+    R_EARTH,
+    ENV_PARAMS,
+    BUFFER_PARAMS,
+    SAFETY_THRESHOLDS,
+)
 from orbital_mechanics.orbit import ChiefOrbit
 from orbital_mechanics.dynamics import relative_dynamics_evader_centered, safe_relative_dynamics
 from orbital_mechanics.coordinate_transforms import (
@@ -136,8 +142,16 @@ class PursuitEvasionEnv(gym.Env):
 
         if randomize:
             # 매 에피소드마다 넓은 범위에서 궤도 매개변수를 샘플링
-            a = np.random.uniform(7000e3, 8500e3)  # 7000~8500 km
-            e = np.random.uniform(0.0, 0.5)
+            # 근지점 고도가 지구 내부에 위치하지 않도록 최소 고도 조건을 적용
+            h_min = 200e3  # 최소 근지점 고도 (200 km)
+
+            while True:
+                a = np.random.uniform(7000e3, 8500e3)  # 7000~8500 km
+                e = np.random.uniform(0.0, 0.5)
+
+                perigee_altitude = a * (1 - e) - R_EARTH
+                if perigee_altitude >= h_min:
+                    break
 
         self.evader_orbit = ChiefOrbit(
             a=a,
