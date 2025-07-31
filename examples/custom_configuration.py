@@ -6,6 +6,7 @@
 from config.settings import get_config, ProjectConfig
 from environment.pursuit_evasion_env import PursuitEvasionEnv
 from training.trainer import create_trainer
+from utils.constants import R_EARTH
 
 
 def create_custom_config() -> ProjectConfig:
@@ -45,7 +46,7 @@ def main():
     
     # 2. 설정 정보 출력
     print(f"실험 이름: {config.experiment_name}")
-    print(f"궤도 고도: {(config.orbit.a - 6378e3)/1000:.0f} km")
+    print(f"궤도 고도: {(config.orbit.a - R_EARTH)/1000:.0f} km")
     print(f"최대 스텝: {config.environment.max_steps}")
     print(f"학습률: {config.training.learning_rate}")
     
