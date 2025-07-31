@@ -85,12 +85,9 @@ def train_standard_model(config: ProjectConfig, save_path: Optional[str] = None)
     # 학습 실행
     trainer.train(total_timesteps=config.training.total_timesteps)
     
-    # 모델 저장
-    if save_path is None:
-        save_path = f"{trainer.log_dir}/models/standard_sac_final.zip"
-    trainer.save_model(save_path)
-    
-    print(f"표준 SAC 학습 완료. 모델 저장: {save_path}")
+    # train() 내부에서 최종 모델이 저장되므로 별도 저장 생략
+    final_model_path = f"{trainer.log_dir}/models/sac_final.zip"
+    print(f"표준 SAC 학습 완료. 모델 저장: {final_model_path}")
     
     # 환경 정리
     if hasattr(env, 'close'):
@@ -266,8 +263,8 @@ def interactive_mode():
                 print("학습이 취소되었습니다.")
             
         elif choice == '2' or choice == 'evaluate':
-            model_path = input("모델 경로 (기본값: models/standard_sac_final.zip): ").strip()
-            model_path = model_path if model_path else "models/standard_sac_final.zip"
+            model_path = input("모델 경로 (기본값: models/sac_final.zip): ").strip()
+            model_path = model_path if model_path else "models/sac_final.zip"
             
             if not os.path.exists(model_path):
                 print(f"모델 파일을 찾을 수 없습니다: {model_path}")
@@ -303,8 +300,8 @@ def interactive_mode():
             evaluate_model(model_path, config, n_tests)
             
         elif choice == '3' or choice == 'demo':
-            model_path = input("모델 경로 (기본값: models/standard_sac_final.zip): ").strip()
-            model_path = model_path if model_path else "models/standard_sac_final.zip"
+            model_path = input("모델 경로 (기본값: models/sac_final.zip): ").strip()
+            model_path = model_path if model_path else "models/sac_final.zip"
             
             if not os.path.exists(model_path):
                 print(f"모델 파일을 찾을 수 없습니다: {model_path}")
@@ -351,7 +348,7 @@ def main():
   python main.py --mode train_standard --timesteps 100000 --experiment-name my_experiment
   
   # 모델 평가
-  python main.py --mode evaluate --model-path models/standard_sac_final.zip
+  python main.py --mode evaluate --model-path models/sac_final.zip
   
   # GPU 사용 강제
   python main.py --mode train_standard --gpu
@@ -499,7 +496,7 @@ def main():
             
             # 학습 후 간단한 평가
             if input("\n학습된 모델을 평가하시겠습니까? (y/n): ").lower() == 'y':
-                evaluate_model(f"{trainer.log_dir}/models/standard_sac_final.zip", config, 5)
+                evaluate_model(f"{trainer.log_dir}/models/sac_final.zip", config, 5)
             
         elif args.mode == 'train_nash':
             trainer = train_nash_model(config)
