@@ -249,12 +249,20 @@ def interactive_mode():
                 n_envs = input(f"병렬 환경 수 (기본값: {config.training.n_envs}): ").strip()
                 if n_envs:
                     config.training.n_envs = int(n_envs)
+
+                # 궤도 주기 모드 사용 여부
+                orbit_cycles = input(
+                    f"3궤도 주기 모드 사용? (y/n, 기본값: {'y' if config.environment.use_orbit_cycles else 'n'}): "
+                ).strip().lower()
+                if orbit_cycles:
+                    config.environment.use_orbit_cycles = orbit_cycles == 'y'
             
             print(f"\n학습 설정:")
             print(f"  - 타임스텝: {config.training.total_timesteps:,}")
             print(f"  - GA-STM 사용: {config.environment.use_gastm}")
             print(f"  - c 파라미터: {config.environment.c}")
             print(f"  - 병렬 환경: {config.training.n_envs}")
+            print(f"  - 3궤도 주기 사용: {config.environment.use_orbit_cycles}")
             
             confirm = input("\n이 설정으로 학습을 시작하시겠습니까? (y/n): ").strip().lower()
             if confirm == 'y':
@@ -292,10 +300,17 @@ def interactive_mode():
             if delta_v_pmax:
                 config.environment.delta_v_pmax = float(delta_v_pmax)
 
+            orbit_cycles = input(
+                f"3궤도 주기 모드 사용? (y/n, 기본값: {'y' if config.environment.use_orbit_cycles else 'n'}): "
+            ).strip().lower()
+            if orbit_cycles:
+                config.environment.use_orbit_cycles = orbit_cycles == 'y'
+
             print("\n평가 설정:")
             print(f"  GA-STM 사용: {config.environment.use_gastm}")
             print(f"  회피자 최대 Delta-V: {config.environment.delta_v_emax} m/s")
             print(f"  추격자 최대 Delta-V: {config.environment.delta_v_pmax} m/s")
+            print(f"  3궤도 주기 사용: {config.environment.use_orbit_cycles}")
 
             evaluate_model(model_path, config, n_tests)
             
@@ -320,8 +335,16 @@ def interactive_mode():
             config.training.total_timesteps = 5000
             config.training.n_envs = 2
             config.environment.use_gastm = use_gastm == 'y'
-            
-            print(f"GA-STM {'사용' if config.environment.use_gastm else '미사용'}으로 테스트 시작...")
+
+            orbit_cycles = input(
+                f"3궤도 주기 모드 사용? (y/n, 기본값: {'y' if config.environment.use_orbit_cycles else 'n'}): "
+            ).strip().lower()
+            if orbit_cycles:
+                config.environment.use_orbit_cycles = orbit_cycles == 'y'
+
+            print(
+                f"GA-STM {'사용' if config.environment.use_gastm else '미사용'} / 3궤도 주기 {'사용' if config.environment.use_orbit_cycles else '미사용'}으로 테스트 시작..."
+            )
             train_standard_model(config)
             
         elif choice == '5' or choice == 'exit':
@@ -402,6 +425,11 @@ def main():
                        help='회피자 최대 Delta-V (m/s)')
     parser.add_argument('--delta-v-pmax', type=float, default=None,
                        help='추격자 최대 Delta-V (m/s)')
+    parser.add_argument('--use-orbit-cycles', dest='use_orbit_cycles', action='store_true',
+                       help='3궤도 주기 모드 사용 (기본값: 사용)')
+    parser.add_argument('--no-orbit-cycles', dest='use_orbit_cycles', action='store_false',
+                       help='3궤도 주기 모드 비활성화')
+    parser.set_defaults(use_orbit_cycles=None)
     
     args = parser.parse_args()
     
@@ -462,6 +490,10 @@ def main():
         if args.delta_v_pmax is not None:
             custom_config['environment'] = custom_config.get('environment', {})
             custom_config['environment']['delta_v_pmax'] = args.delta_v_pmax
+
+        if args.use_orbit_cycles is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['use_orbit_cycles'] = args.use_orbit_cycles
         
         config = get_config(
             experiment_name=args.experiment_name or f"{args.mode}_experiment",
@@ -476,6 +508,7 @@ def main():
     print(f"GPU 사용: {config.training.use_gpu}")
     print(f"디버그 모드: {config.debug_mode}")
     print(f"GA-STM 사용: {config.environment.use_gastm}")
+    print(f"3궤도 주기 사용: {config.environment.use_orbit_cycles}")
     
     if args.mode.startswith('train'):
         print(f"학습 스텝: {config.training.total_timesteps:,}")

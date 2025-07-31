@@ -67,6 +67,7 @@ class PursuitEvasionEnv(gym.Env):
             self.config = config.environment
             self.debug_mode = config.debug_mode
             self.use_rk4 = self.config.use_rk4
+            self.use_orbit_cycles = self.config.use_orbit_cycles
         else:
             # 기본 설정 사용
             from config.settings import default_config
@@ -74,6 +75,7 @@ class PursuitEvasionEnv(gym.Env):
             self.config = default_config.environment
             self.debug_mode = default_config.debug_mode
             self.use_rk4 = self.config.use_rk4
+            self.use_orbit_cycles = self.config.use_orbit_cycles
 
         # 환경 파라미터 설정
         self._init_parameters()
@@ -116,6 +118,7 @@ class PursuitEvasionEnv(gym.Env):
         self.max_steps = self.config.max_steps
         self.max_delta_v_budget = self.config.max_delta_v_budget
         self.max_initial_separation = self.config.max_initial_separation
+        self.use_orbit_cycles = self.config.use_orbit_cycles
 
         # 정규화 스케일
         self.pos_scale = self.max_initial_separation
@@ -479,6 +482,9 @@ class PursuitEvasionEnv(gym.Env):
 
     def get_current_orbit_mode(self) -> str:
         """현재 궤도 주기에 따른 모드 반환"""
+        if not self.use_orbit_cycles:
+            return "game"
+
         # 현재 어느 궤도인지 계산 (0, 1, 2)
         current_orbit_index = self.complete_orbits % 3
         return self.orbit_modes[current_orbit_index]
@@ -885,8 +891,10 @@ class PursuitEvasionEnv(gym.Env):
             }
             return True, self.termination_details
 
-        # 3. 최대 단계 초과 (최소 3궤도는 보장)
-        if self.step_count >= self.max_steps or self.complete_orbits >= 3:
+        # 3. 최대 단계 초과 (궤도 주기 제한 옵션 적용)
+        if self.step_count >= self.max_steps or (
+            self.use_orbit_cycles and self.complete_orbits >= 3
+        ):
             norm_distance = min(rho_mag / self.evasion_distance, 1.0)
             self.termination_details = {
                 "outcome": "max_steps_reached",

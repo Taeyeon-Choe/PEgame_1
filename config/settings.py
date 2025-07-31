@@ -47,6 +47,8 @@ class EnvironmentConfig:
     max_initial_separation: float = ENV_PARAMS["max_initial_separation"]
     use_rk4: bool = ENV_PARAMS["use_rk4"]
     use_gastm: bool = ENV_PARAMS["use_gastm"]
+    # 궤도 모드 주기 사용 여부
+    use_orbit_cycles: bool = ENV_PARAMS["use_orbit_cycles"]
 
     # 버퍼 설정
     capture_buffer_steps: int = BUFFER_PARAMS["capture_buffer_steps"]
