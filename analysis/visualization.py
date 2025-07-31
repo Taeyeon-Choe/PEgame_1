@@ -13,7 +13,7 @@ import os
 import json
 import csv
 
-from utils.constants import PLOT_PARAMS, SAFETY_THRESHOLDS
+from utils.constants import PLOT_PARAMS, SAFETY_THRESHOLDS, R_EARTH
 
 
 def setup_matplotlib():
@@ -656,9 +656,9 @@ def plot_eci_trajectories(times: np.ndarray,
     if show_earth:
         u = np.linspace(0, 2 * np.pi, 30)
         v = np.linspace(0, np.pi, 20)
-        x_earth = 6378e3 * np.outer(np.cos(u), np.sin(v))  # 미터 단위
-        y_earth = 6378e3 * np.outer(np.sin(u), np.sin(v))
-        z_earth = 6378e3 * np.outer(np.ones(np.size(u)), np.cos(v))
+        x_earth = R_EARTH * np.outer(np.cos(u), np.sin(v))  # 미터 단위
+        y_earth = R_EARTH * np.outer(np.sin(u), np.sin(v))
+        z_earth = R_EARTH * np.outer(np.ones(np.size(u)), np.cos(v))
         ax.plot_surface(x_earth, y_earth, z_earth, color='grey', alpha=0.3)
     
     # 축 설정
@@ -698,8 +698,8 @@ def plot_eci_trajectories(times: np.ndarray,
         final_dist = np.linalg.norm(evader_states[-1, :3] - pursuer_states[-1, :3])
         
         # 평균 고도
-        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6378e3
-        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6378e3
+        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - R_EARTH
+        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - R_EARTH
         
         textstr = f'Initial Distance: {initial_dist/1000:.1f} km\n'
         textstr += f'Final Distance: {final_dist/1000:.1f} km\n'
@@ -863,9 +863,9 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
         u = np.linspace(0, 2 * np.pi, 30)
         v = np.linspace(0, np.pi, 20)
         # 지구 반지름을 km 단위로 사용
-        x_earth = 6378 * np.outer(np.cos(u), np.sin(v))
-        y_earth = 6378 * np.outer(np.sin(u), np.sin(v))
-        z_earth = 6378 * np.outer(np.ones(np.size(u)), np.cos(v))
+        x_earth = (R_EARTH / 1000) * np.outer(np.cos(u), np.sin(v))
+        y_earth = (R_EARTH / 1000) * np.outer(np.sin(u), np.sin(v))
+        z_earth = (R_EARTH / 1000) * np.outer(np.ones(np.size(u)), np.cos(v))
         fig.add_trace(
             go.Surface(
                 x=x_earth, 
@@ -900,8 +900,8 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     if show_stats:
         initial_dist = np.linalg.norm(evader_states[0, :3] - pursuer_states[0, :3])
         final_dist = np.linalg.norm(evader_states[-1, :3] - pursuer_states[-1, :3])
-        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - 6378e3
-        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - 6378e3
+        evader_alt = np.mean(np.linalg.norm(evader_states[:, :3], axis=1)) - R_EARTH
+        pursuer_alt = np.mean(np.linalg.norm(pursuer_states[:, :3], axis=1)) - R_EARTH
         
         textstr = f"Initial Distance: {initial_dist/1000:.1f} km<br>"
         textstr += f"Final Distance: {final_dist/1000:.1f} km<br>"
