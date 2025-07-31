@@ -90,10 +90,10 @@ python examples/quick_start.py
 ### 2. 학습된 모델 평가
 ```bash
 # 모델 평가
-python main.py --mode evaluate --model-path models/standard_sac_final.zip --n-tests 20
+python main.py --mode evaluate --model-path models/sac_final.zip --n-tests 20
 
 # 데모 실행
-python main.py --mode demo --model-path models/standard_sac_final.zip
+python main.py --mode demo --model-path models/sac_final.zip
 ```
 
 ### 3. Jupyter Notebook으로 시작

@@ -277,7 +277,7 @@ class EvasionTrackingCallback(BaseCallback):
             "episodes_info": self.episodes_info[-100:]  # 마지막 100개만 저장
         }
         
-        stats_path = os.path.join(self.log_dir, "training_stats.json")
+        stats_path = os.path.join(self.log_dir, "evasion_stats.json")
         with open(stats_path, 'w') as f:
             json.dump(stats, f, indent=2)
         
