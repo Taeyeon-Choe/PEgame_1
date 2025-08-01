@@ -595,7 +595,7 @@ def plot_eci_trajectories(
     show_earth: bool = True,
     show_stats: bool = True,
     use_plotly: bool = True,
-    animate: bool = False,
+    animate: bool = True,
 ):
     """ECI 프레임 궤적 시각화
 
