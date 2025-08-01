@@ -586,21 +586,34 @@ def plot_orbital_elements_comparison(evader_elements: Dict, pursuer_elements: Di
     plt.close()
 
 
-def plot_eci_trajectories(times: np.ndarray,
-                          pursuer_states: np.ndarray,
-                          evader_states: np.ndarray,
-                          save_path: Optional[str] = None,
-                          title: str = "ECI Trajectories",
-                          show_earth: bool = True,
-                          show_stats: bool = True,
-                          use_plotly: bool = True):
+def plot_eci_trajectories(
+    times: np.ndarray,
+    pursuer_states: np.ndarray,
+    evader_states: np.ndarray,
+    save_path: Optional[str] = None,
+    title: str = "ECI Trajectories",
+    show_earth: bool = True,
+    show_stats: bool = True,
+    use_plotly: bool = True,
+    animate: bool = False,
+):
     """ECI 프레임 궤적 시각화
 
     각 시각별 위치를 점으로 표시하며, 시간에 따라 색상이 변한다.
     Pursuer는 적색 스펙트럼, Evader는 청색 스펙트럼을 사용한다.
     ``use_plotly``가 ``True``이면 Plotly 기반 인터랙티브 HTML을 생성한다.
+    ``animate``가 ``True``이면 시간 순서대로 점이 나타나는 애니메이션을 반환한다.
     """
     if use_plotly:
+        if animate:
+            return _plot_eci_trajectories_plotly_live(
+                times,
+                pursuer_states,
+                evader_states,
+                save_path=save_path,
+                title=title,
+                show_earth=show_earth,
+            )
         return _plot_eci_trajectories_plotly(
             times,
             pursuer_states,
@@ -982,6 +995,124 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
         }
         with open(f"{save_path}_eci.json", 'w') as f:
             json.dump(ephemeris_data, f, indent=2)
+
+    return fig
+
+
+def _plot_eci_trajectories_plotly_live(
+    times: np.ndarray,
+    pursuer_states: np.ndarray,
+    evader_states: np.ndarray,
+    save_path: Optional[str] = None,
+    title: str = "ECI Trajectories",
+    show_earth: bool = True,
+):
+    """Plotly 애니메이션으로 ECI 궤적을 실시간 재생"""
+
+    import plotly.graph_objects as go
+
+    evader_km = evader_states / 1000.0
+    pursuer_km = pursuer_states / 1000.0
+
+    frames = []
+    for k in range(len(times)):
+        frames.append(
+            go.Frame(
+                data=[
+                    go.Scatter3d(
+                        x=evader_km[: k + 1, 0],
+                        y=evader_km[: k + 1, 1],
+                        z=evader_km[: k + 1, 2],
+                        mode="lines",
+                        line=dict(color="blue"),
+                    ),
+                    go.Scatter3d(
+                        x=pursuer_km[: k + 1, 0],
+                        y=pursuer_km[: k + 1, 1],
+                        z=pursuer_km[: k + 1, 2],
+                        mode="lines",
+                        line=dict(color="red"),
+                    ),
+                    go.Scatter3d(
+                        x=[evader_km[k, 0]],
+                        y=[evader_km[k, 1]],
+                        z=[evader_km[k, 2]],
+                        mode="markers",
+                        marker=dict(color="blue", size=4),
+                        name="Evader",
+                    ),
+                    go.Scatter3d(
+                        x=[pursuer_km[k, 0]],
+                        y=[pursuer_km[k, 1]],
+                        z=[pursuer_km[k, 2]],
+                        mode="markers",
+                        marker=dict(color="red", size=4),
+                        name="Pursuer",
+                    ),
+                ],
+                name=str(k),
+            )
+        )
+
+    data = frames[0].data
+    if show_earth:
+        u = np.linspace(0, 2 * np.pi, 30)
+        v = np.linspace(0, np.pi, 20)
+        x_earth = (R_EARTH / 1000) * np.outer(np.cos(u), np.sin(v))
+        y_earth = (R_EARTH / 1000) * np.outer(np.sin(u), np.sin(v))
+        z_earth = (R_EARTH / 1000) * np.outer(np.ones(np.size(u)), np.cos(v))
+        data = list(data) + [
+            go.Surface(
+                x=x_earth,
+                y=y_earth,
+                z=z_earth,
+                opacity=0.3,
+                showscale=False,
+                colorscale=[[0, "lightblue"], [1, "lightblue"]],
+                name="Earth",
+            )
+        ]
+
+    fig = go.Figure(data=data, frames=frames)
+
+    steps = [
+        dict(
+            method="animate",
+            args=[[f.name], {"mode": "immediate", "frame": {"duration": 50, "redraw": True}}],
+            label=str(idx),
+        )
+        for idx, f in enumerate(frames)
+    ]
+    sliders = [dict(active=0, steps=steps, x=0.1, y=0, len=0.9)]
+    fig.update_layout(
+        title=title,
+        scene=dict(xaxis_title="X (km)", yaxis_title="Y (km)", zaxis_title="Z (km)", aspectmode="data"),
+        updatemenus=[
+            dict(
+                type="buttons",
+                showactive=False,
+                buttons=[
+                    dict(
+                        label="Play",
+                        method="animate",
+                        args=[None, {"frame": {"duration": 50, "redraw": True}, "fromcurrent": True}],
+                    ),
+                    dict(
+                        label="Pause",
+                        method="animate",
+                        args=[[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate"}],
+                    ),
+                ],
+                x=0,
+                y=1.05,
+            )
+        ],
+        sliders=sliders,
+        margin=dict(l=0, r=0, b=0, t=50),
+    )
+
+    if save_path:
+        fig.write_html(f"{save_path}_eci_live.html")
 
     return fig
 
