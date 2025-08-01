@@ -658,7 +658,60 @@ class PursuitEvasionEnv(gym.Env):
         y_lvlh = y_lvlh / np.linalg.norm(y_lvlh)
 
         R_lvlh_to_eci = np.vstack((x_lvlh, y_lvlh, z_lvlh)).T
+
+        r_pursuer_abs = r_evader + R_lvlh_to_eci @ self.state[:3]
+        omega_lvlh = h_evader / r_evader_norm**2
+        v_pursuer_abs = (
+            v_evader
+            + R_lvlh_to_eci @ self.state[3:6]
+            + np.cross(omega_lvlh, R_lvlh_to_eci @ self.state[:3])
+        )
+
+        # 회피자에게 델타-v 적용 (ECI 좌표계)
         delta_v_e_eci = R_lvlh_to_eci @ delta_v_e
+        v_evader_new = v_evader + delta_v_e_eci
+
+        # 회피자의 새로운 궤도 요소 계산
+        new_elements = state_to_orbital_elements(
+            r_evader, v_evader_new, self.evader_orbit.mu
+        )
+
+        # 회피자 궤도 업데이트
+        self.evader_orbit = ChiefOrbit(
+            a=new_elements[0],
+            e=new_elements[1],
+            i=new_elements[2],
+            RAAN=new_elements[3],
+            omega=new_elements[4],
+            M0=new_elements[5],
+            mu=MU_EARTH,
+        )
+
+        # 새로운 LVLH 프레임 계산 (회피자의 새 속도 기준)
+        h_evader_new = np.cross(r_evader, v_evader_new)
+        h_evader_new_norm = np.linalg.norm(h_evader_new)
+
+        x_lvlh_new = r_evader / r_evader_norm
+        z_lvlh_new = h_evader_new / h_evader_new_norm
+        y_lvlh_new = np.cross(z_lvlh_new, x_lvlh_new)
+        y_lvlh_new = y_lvlh_new / np.linalg.norm(y_lvlh_new)
+
+        R_lvlh_to_eci_new = np.vstack((x_lvlh_new, y_lvlh_new, z_lvlh_new)).T
+
+        # 추격자의 상대 상태를 새로운 LVLH 프레임에서 계산
+        r_rel_new = R_lvlh_to_eci_new.T @ (r_pursuer_abs - r_evader)
+
+        # 새로운 LVLH 프레임의 회전 속도
+        omega_lvlh_new = h_evader_new / r_evader_norm**2
+
+        # 상대 속도 계산 (회전 효과 고려)
+        v_rel_new = (
+            R_lvlh_to_eci_new.T @ (v_pursuer_abs - v_evader_new)
+            - np.cross(omega_lvlh_new, r_rel_new)
+        )
+
+        # 상태 업데이트
+        self.state = np.concatenate((r_rel_new, v_rel_new))
 
         # 누적 델타-V 기록
         self.delta_v_e_sum += delta_v_e
@@ -675,63 +728,23 @@ class PursuitEvasionEnv(gym.Env):
                 "orbit_mode": self.current_orbit_mode,
             }
         )
+        
+        if self.debug_mode:
+            print(f"\n[Delta-V 적용 at t={self.t:.1f}s]")
+            print(f"  Delta-V (LVLH): {delta_v_e}")
+            print(
+                f"  Delta-V magnitude: {np.linalg.norm(delta_v_e):.6f} m/s"
+            )
+            print(
+                f"  회피자 경사각 변화: {self.initial_evader_orbital_elements['i']*180/np.pi:.6f}° -> {new_elements[2]*180/np.pi:.6f}°"
+            )
+            pursuer_elements = state_to_orbital_elements(
+                r_pursuer_abs, v_pursuer_abs, self.evader_orbit.mu
+            )
+            print(
+                f"  추격자 경사각: {pursuer_elements[2]*180/np.pi:.6f}° (변화 없어야 함)"
+            )
 
-        # 새 회피자 속도
-        v_evader_new = v_evader + delta_v_e_eci
-
-        # 새 궤도 요소 계산
-        a_e_new, e_e_new, i_e_new, RAAN_e_new, omega_e_new, M_e_new = (
-            state_to_orbital_elements(r_evader, v_evader_new)
-        )
-
-        # 추격자 절대 상태 계산
-        r_pursuer = r_evader + R_lvlh_to_eci @ self.state[:3]
-
-        # 새 LVLH 프레임 계산
-        h_evader_new = np.cross(r_evader, v_evader_new)
-        omega_lvlh_new = h_evader_new / (r_evader_norm**2 + 1e-12)
-
-        z_lvlh_new = h_evader_new / (np.linalg.norm(h_evader_new) + 1e-12)
-        y_lvlh_new = np.cross(z_lvlh_new, x_lvlh)
-        y_lvlh_new /= np.linalg.norm(y_lvlh_new) + 1e-12
-        R_lvlh_to_eci_new = np.vstack((x_lvlh, y_lvlh_new, z_lvlh_new)).T
-
-        # 추격자 속도 계산
-        v_pursuer = (
-            v_evader_new
-            + R_lvlh_to_eci_new @ self.state[3:6]
-            + np.cross(omega_lvlh_new, R_lvlh_to_eci_new @ self.state[:3])
-        )
-
-        # 회피자 궤도 업데이트
-        self.evader_orbit = ChiefOrbit(
-            a=a_e_new,
-            e=e_e_new,
-            i=i_e_new,
-            RAAN=RAAN_e_new,
-            omega=omega_e_new,
-            M0=M_e_new,
-            mu=MU_EARTH,
-        )
-
-        # 새 LVLH에서 추격자 상대 상태 계산
-        a_p, e_p, i_p, RAAN_p, omega_p, M_p = state_to_orbital_elements(
-            r_pursuer, v_pursuer
-        )
-        self.state = convert_orbital_elements_to_relative_state(
-            a_e_new,
-            e_e_new,
-            i_e_new,
-            RAAN_e_new,
-            omega_e_new,
-            M_e_new,
-            a_p,
-            e_p,
-            i_p,
-            RAAN_p,
-            omega_p,
-            M_p,
-        )
 
     def _rk4_step(self):
         """RK4 방법으로 상태 업데이트 (개선된 버전)"""
