@@ -264,15 +264,22 @@ def visualize_trajectory(states: np.ndarray,
     ax.set_zlabel('z (m) - Cross-Track Direction')
     ax.set_title(enhanced_title)
     
-    # 동일한 스케일
-    max_range = np.max([
-        np.abs(states[:, 0]).max(),
-        np.abs(states[:, 1]).max(),
-        np.abs(states[:, 2]).max()
-    ])
-    ax.set_xlim(-max_range, max_range)
-    ax.set_ylim(-max_range, max_range)
-    ax.set_zlim(-max_range, max_range)
+    # 축 범위를 데이터에 맞게 설정
+    x_min, x_max = states[:, 0].min(), states[:, 0].max()
+    y_min, y_max = states[:, 1].min(), states[:, 1].max()
+    z_min, z_max = states[:, 2].min(), states[:, 2].max()
+
+    x_range = x_max - x_min
+    y_range = y_max - y_min
+    z_range = z_max - z_min
+
+    max_range = max(x_range, y_range, z_range)
+    if max_range == 0:
+        max_range = 1.0
+    margin_ratio = 0.05  # 그래프가 너무 꽉 차지 않도록 약간의 여백
+    ax.set_xlim(x_min - x_range * margin_ratio, x_max + x_range * margin_ratio)
+    ax.set_ylim(y_min - y_range * margin_ratio, y_max + y_range * margin_ratio)
+    ax.set_zlim(z_min - z_range * margin_ratio, z_max + z_range * margin_ratio)
     
     # 범례
     ax.legend(loc='best')
