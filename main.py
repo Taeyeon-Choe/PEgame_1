@@ -201,11 +201,10 @@ def interactive_mode():
     print("1. train - 새 모델 학습")
     print("2. evaluate - 기존 모델 평가")
     print("3. demo - 데모 실행")
-    print("4. quick - 빠른 테스트 (5000 스텝)")
-    print("5. exit - 종료")
+    print("4. exit - 종료")
     
     while True:
-        choice = input("\n명령을 선택하세요 (1-5): ").strip()
+        choice = input("\n명령을 선택하세요 (1-4): ").strip()
         
         if choice == '1' or choice == 'train':
             print("\n=== 학습 설정 ===")
@@ -325,29 +324,7 @@ def interactive_mode():
             config = get_config(experiment_name="interactive_demo")
             run_demonstration(model_path, config)
             
-        elif choice == '4' or choice == 'quick':
-            print("\n빠른 테스트 실행 중...")
-            
-            # 빠른 테스트에서도 GA-STM 옵션
-            use_gastm = input("GA-STM으로 테스트? (y/n, 기본값: n): ").strip().lower()
-            
-            config = get_config(experiment_name="quick_test", debug_mode=True)
-            config.training.total_timesteps = 5000
-            config.training.n_envs = 2
-            config.environment.use_gastm = use_gastm == 'y'
-
-            orbit_cycles = input(
-                f"3궤도 주기 모드 사용? (y/n, 기본값: {'y' if config.environment.use_orbit_cycles else 'n'}): "
-            ).strip().lower()
-            if orbit_cycles:
-                config.environment.use_orbit_cycles = orbit_cycles == 'y'
-
-            print(
-                f"GA-STM {'사용' if config.environment.use_gastm else '미사용'} / 3궤도 주기 {'사용' if config.environment.use_orbit_cycles else '미사용'}으로 테스트 시작..."
-            )
-            train_standard_model(config)
-            
-        elif choice == '5' or choice == 'exit':
+        elif choice == '4' or choice == 'exit':
             print("프로그램을 종료합니다.")
             break
         else:
@@ -363,9 +340,6 @@ def main():
 예제:
   # 대화형 모드 (권장)
   python main.py
-  
-  # 빠른 학습 테스트
-  python main.py --mode train_standard --timesteps 10000
   
   # 전체 학습
   python main.py --mode train_standard --timesteps 100000 --experiment-name my_experiment
