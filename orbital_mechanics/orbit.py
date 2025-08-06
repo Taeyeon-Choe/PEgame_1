@@ -22,35 +22,33 @@ class ChiefOrbit:
         omega: float,
         M0: float,
         mu: float = MU_EARTH,
+        epoch_time=0
     ):
         self.a = a
         self.e = e
         self.i = i
         self.RAAN = RAAN
         self.omega = omega
+        self.epoch_time = epoch_time  # M0가 정의된 시각
         self.M0 = M0
         self.mu = mu
         self.n = np.sqrt(mu / a**3)
         self.period = 2 * np.pi / self.n
         self._state_cache = {}
-
+        
     def kepler_equation(self, E: float, M: float) -> float:
         return E - self.e * np.sin(E) - M
 
     def kepler_equation_derivative(self, E: float) -> float:
         return 1 - self.e * np.cos(E)
 
-    def get_M(self, t: float) -> Tuple[float, int]:
-        """Mean Anomaly와 완료된 궤도 수 반환"""
-        M_total = self.M0 + self.n * t
-        
-        # 궤도 수
-        orbits = int(M_total / (2 * np.pi))
+    def get_M(self, t: float) -> float:
+        dt = t - self.epoch_time  # epoch으로부터의 경과 시간
         
         # 래핑된 Mean Anomaly
-        M = M_total % (2 * np.pi)
+        M = (self.M0 + self.n * dt) % (2*np.pi)
         
-        return M, orbits
+        return M
 
     def get_E(self, t: float) -> float:
         M = self.get_M(t)
