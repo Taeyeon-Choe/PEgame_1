@@ -282,8 +282,8 @@ def lvlh_to_eci(r_chief: np.ndarray, v_chief: np.ndarray,
     
     # ECI 속도 계산
     v_deputy = (v_chief + R_lvlh_to_eci @ v_rel_lvlh + 
-               np.cross(omega_lvlh, R_lvlh_to_eci @ r_rel_lvlh))
-    
+               np.cross(omega_lvlh, r_rel_lvlh))
+
     return r_deputy, v_deputy
 
 
