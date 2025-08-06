@@ -40,8 +40,17 @@ class ChiefOrbit:
     def kepler_equation_derivative(self, E: float) -> float:
         return 1 - self.e * np.cos(E)
 
-    def get_M(self, t: float) -> float:
-        return self.M0 + self.n * t
+    def get_M(self, t: float) -> Tuple[float, int]:
+        """Mean Anomaly와 완료된 궤도 수 반환"""
+        M_total = self.M0 + self.n * t
+        
+        # 궤도 수
+        orbits = int(M_total / (2 * np.pi))
+        
+        # 래핑된 Mean Anomaly
+        M = M_total % (2 * np.pi)
+        
+        return M, orbits
 
     def get_E(self, t: float) -> float:
         M = self.get_M(t)
