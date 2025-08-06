@@ -675,6 +675,8 @@ class PursuitEvasionEnv(gym.Env):
         new_elements = state_to_orbital_elements(
             r_evader, v_evader_new, self.evader_orbit.mu
         )
+        
+        current_M = self.evader_orbit.get_M(self.t)
 
         # 회피자 궤도 업데이트
         self.evader_orbit = ChiefOrbit(
@@ -683,8 +685,9 @@ class PursuitEvasionEnv(gym.Env):
             i=new_elements[2],
             RAAN=new_elements[3],
             omega=new_elements[4],
-            M0=new_elements[5],
             mu=MU_EARTH,
+            M0=current_M,
+            epoch_time=self.t
         )
 
         # 새로운 LVLH 프레임 계산 (회피자의 새 속도 기준)
