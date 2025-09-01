@@ -75,7 +75,7 @@ def _j2_diff_accel_core(relative_pos: np.ndarray, r_evader: np.ndarray, v_evader
     r_pursuer_norm = np.sqrt(max(r_pursuer_squared, 1e-10))
 
     # J2 가속도 계산
-    j2_factor_evader = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / (r_evader_norm**4)
+    j2_factor_evader = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / (r_evader_norm**5)
     z_ratio_evader = r_evader[2] / r_evader_norm
     term_evader = 5 * z_ratio_evader ** 2 - 1
     
@@ -87,7 +87,7 @@ def _j2_diff_accel_core(relative_pos: np.ndarray, r_evader: np.ndarray, v_evader
         ]
     )
 
-    j2_factor_pursuer = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / (r_pursuer_norm**4)
+    j2_factor_pursuer = 1.5 * J2_EARTH * MU_EARTH * R_EARTH**2 / (r_pursuer_norm**5)
     z_ratio_pursuer = r_pursuer_eci[2] / r_pursuer_norm
     term_pursuer = 5 * z_ratio_pursuer ** 2 - 1
     
