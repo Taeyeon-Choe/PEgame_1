@@ -211,8 +211,7 @@ def compute_j2_differential_acceleration(
         if np.any(np.isnan(j2_accel)):
             return np.zeros(3)
         
-        # 극단적인 값 제한
-        max_accel = 1e-3  # 1 mm/s^2
+        max_accel = 1e-6  # 0.001 mm/s^2
         j2_accel = np.clip(j2_accel, -max_accel, max_accel)
         
         return j2_accel
