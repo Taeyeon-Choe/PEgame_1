@@ -231,8 +231,9 @@ def eci_to_lvlh(r_chief: np.ndarray, v_chief: np.ndarray,
     r_rel = R_eci_to_lvlh @ (r_deputy - r_chief)
     
     # LVLH 프레임의 회전 속도 계산
-    omega_lvlh = h_chief / r_chief_norm**2
-    
+    omega_eci = h_chief / (r_chief_norm**2)
+    omega_lvlh = R_eci_to_lvlh @ omega_eci
+                  
     # 회전 효과를 고려한 상대 속도 계산
     v_rel = R_eci_to_lvlh @ (v_deputy - v_chief) - np.cross(omega_lvlh, r_rel)
     
