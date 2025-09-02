@@ -1,7 +1,6 @@
 """
 pursuit_evasion_env_ga_stm.py
-PEgame 환경: GASTMPropagator를 사용한 STM 통합 버전
-시간 동기화 문제 해결 버전
+PEgame 환경: GASTMPropagator를 사용한 STM 통합
 """
 
 import numpy as np
@@ -75,33 +74,35 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
         delta_v_e_mag = np.linalg.norm(delta_v_e)
         self.total_delta_v_e += delta_v_e_mag
-
+    
         # 회피자 기동 적용 (궤도 변경)
         if np.any(delta_v_e):
             self._apply_evader_delta_v(delta_v_e)
-
-        # 2. 추격자(Pursuer) 액션 처리 (내부적으로 계산)
+    
+        # 2. 추격자(Pursuer) 액션 계산
         if self.step_count % self.k == 0:
             delta_v_p = self.compute_interception_strategy(self.state)
             self.pursuer_last_action = delta_v_p
         else:
             delta_v_p = np.zeros(3)
-
-        # 3. 상태 전파
+    
+        # 3. 상태 전파 - 통합된 방식
         if self.use_gastm and self.gastm_propagator:
-            # STM 모드: 추격자 제어 적용 후 전파
-            if np.any(delta_v_p):
-                self.state = self.gastm_propagator.apply_pursuer_control(
-                    delta_v_p, self.dt, self.t
-                )
-            else:
-                self.state = self.gastm_propagator.propagate(self.dt, self.t)
+            # GA-STM 모드: 항상 propagate_with_control 사용
+            # 제어가 없어도 u=0으로 일관되게 처리
+            self.state = self.gastm_propagator.propagate_with_control(
+                control=delta_v_p,
+                dt=self.dt,
+                current_time=self.t,
+                current_state=self.state  # 명시적 동기화
+            )
         else:
-            # 비선형 모드: 추격자 제어 적용 후 전파
-            self.state[3:] += delta_v_p
+            # 비선형 모드: 기존 방식 유지
+            if np.any(delta_v_p):
+                self.state[3:] += delta_v_p  # 순간 임펄스
             self._simulate_relative_motion()
-
-        # 4. 시간 및 스텝 업데이트 (한 번만!)
+    
+        # 4. 시간 및 스텝 업데이트
         self.t += self.dt
         self.step_count += 1
         
@@ -122,11 +123,13 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
             "pursuer_dv_magnitude": np.linalg.norm(delta_v_p),
             "total_evader_delta_v": self.total_delta_v_e,
             "nash_metric": self.nash_metric,
-            "dynamics_mode": "GA_STM" if self.use_gastm else "Nonlinear"
+            "dynamics_mode": "GA_STM" if self.use_gastm else "Nonlinear",
+            "control_applied": np.any(delta_v_p)  # 디버깅용
         })
+        
         if "outcome" in termination_info:
             info["outcome"] = termination_info["outcome"]
-
+    
         return normalized_obs, evader_reward, done, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 
