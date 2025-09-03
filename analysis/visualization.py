@@ -274,12 +274,12 @@ def visualize_trajectory(states: np.ndarray,
     z_range = z_max - z_min
 
     max_range = max(x_range, y_range, z_range)
-    if max_range == 0:
-        max_range = 1.0
-    margin_ratio = 0.05  # 그래프가 너무 꽉 차지 않도록 약간의 여백
-    ax.set_xlim(x_min - x_range * margin_ratio, x_max + x_range * margin_ratio)
-    ax.set_ylim(y_min - y_range * margin_ratio, y_max + y_range * margin_ratio)
-    ax.set_zlim(z_min - z_range * margin_ratio, z_max + z_range * margin_ratio)
+    #if max_range == 0:
+    #    max_range = 1.0
+    #margin_ratio = 0.05  # 그래프가 너무 꽉 차지 않도록 약간의 여백
+    #ax.set_xlim(x_min - x_range * margin_ratio, x_max + x_range * margin_ratio)
+    #ax.set_ylim(y_min - y_range * margin_ratio, y_max + y_range * margin_ratio)
+    #ax.set_zlim(z_min - z_range * margin_ratio, z_max + z_range * margin_ratio)
     
     # 범례
     ax.legend(loc='best')
@@ -290,7 +290,7 @@ def visualize_trajectory(states: np.ndarray,
     # 행동 벡터 표시 (선택적)
     if actions_e is not None and actions_p is not None:
         # 일부 행동만 표시 (가독성을 위해)
-        step = max(1, len(states) // 20)
+        step = max(1, len(states) // 1)
         
         for i in range(0, len(states), step):
             if i < len(actions_e) and np.any(actions_e[i] != 0):
