@@ -170,10 +170,7 @@ class ModelEvaluator:
             rewards['pursuer'].append(pursuer_reward)
             
             # 상태 및 액션 기록
-            phys_state = np.concatenate([
-                obs[:3] * self.env.pos_scale,   # 위치
-                obs[3:6] * self.env.vel_scale,  # 속도
-            ])
+            phys_state = self.env.state.copy()
             
             action_e = self.env._denormalize_action(normalized_action)
             action_p = self.env.pursuer_last_action.copy() if hasattr(self.env, 'pursuer_last_action') else np.zeros(3)
