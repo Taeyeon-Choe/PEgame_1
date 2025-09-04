@@ -129,8 +129,14 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         
         if "outcome" in termination_info:
             info["outcome"] = termination_info["outcome"]
+        # 콜백 호환을 위한 거리 키 보강
+        if 'initial_relative_distance' not in info and self.initial_relative_distance is not None:
+            info['initial_relative_distance'] = float(self.initial_relative_distance)
+        final_dist = float(np.linalg.norm(self.state[:3]))
+        info.setdefault('final_relative_distance', final_dist)
+        info.setdefault('final_distance', final_dist)
     
-        return normalized_obs, evader_reward, done, info
+        return normalized_obs, evader_rewㄷard, done, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 
                                   control_sequence: Optional[np.ndarray] = None) -> Dict:
