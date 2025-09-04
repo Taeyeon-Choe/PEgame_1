@@ -1005,9 +1005,14 @@ class PursuitEvasionEnv(gym.Env):
         if done:
             evader_reward = termination_info["evader_reward"]
             pursuer_reward = termination_info["pursuer_reward"]
-            info = termination_info
-            self.final_relative_distance = np.linalg.norm(self.state[:3])
+            # dict 복사(원본 변형 방지)
+            info = dict(termination_info)
+            # 최종/초기 상대거리 일관되게 노출
+            self.final_relative_distance = float(np.linalg.norm(self.state[:3]))
             info['final_distance'] = self.final_relative_distance
+            info.setdefault('final_relative_distance', self.final_relative_distance)
+            if 'initial_relative_distance' not in info and self.initial_relative_distance is not None:
+                info['initial_relative_distance'] = float(self.initial_relative_distance)
         else:
             rho_mag = np.linalg.norm(self.state[:3])
             
