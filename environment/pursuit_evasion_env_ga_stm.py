@@ -89,12 +89,12 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         # 3. 상태 전파 - 통합된 방식
         if self.use_gastm and self.gastm_propagator:
             # GA-STM 모드: 항상 propagate_with_control 사용
-            # 제어가 없어도 u=0으로 일관되게 처리
-            self.state = self.gastm_propagator.propagate_with_control(
-                control=delta_v_p,
+            # GA-STM with impulse at the BEGINNING of the step
+            self.state = self.gastm_propagator.propagate_with_impulse(
+                delta_v=delta_v_p,
                 dt=self.dt,
                 current_time=self.t,
-                current_state=self.state  # 명시적 동기화
+                current_state=self.state
             )
         else:
             # 비선형 모드: 기존 방식 유지
