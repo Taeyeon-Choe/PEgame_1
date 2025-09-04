@@ -136,7 +136,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         info.setdefault('final_relative_distance', final_dist)
         info.setdefault('final_distance', final_dist)
     
-        return normalized_obs, evader_rewㄷard, done, info
+        return normalized_obs, evader_reward, done, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 
                                   control_sequence: Optional[np.ndarray] = None) -> Dict:
