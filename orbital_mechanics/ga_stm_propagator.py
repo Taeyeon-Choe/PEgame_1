@@ -159,3 +159,38 @@ class GASTMPropagator:
         """현재 제어 영향 행렬 반환 (디버깅/분석용)"""
         _, Bk = self._compute_discrete_matrices(dt, current_time)
         return Bk
+
+    def propagate_with_impulse(self, delta_v: np.ndarray, dt: float, current_time: float, current_state: np.ndarray=None):
+        """
+        Propagate one GA-STM step with an instantaneous Δv (impulse) at the BEGINNING of the step.
+        x_plus  = x + [0,0,0, Δv]^T
+        x_next  = Ak @ x_plus
+        Notes
+        -----
+        - Ak maps t_k → t_k+dt under zero-input.
+        - Bk is not used in the impulse model.
+        - delta_v must be in the same RTN/LVLH frame as the relative state velocity components.
+        """
+        if current_state is not None:
+            self.relative_state = np.asarray(current_state, dtype=float)
+        assert dt > 0.0, "dt must be > 0"
+        # Build Ak for this step (Bk returned but unused)
+        Ak, _Bk = self._compute_discrete_matrices(dt, current_time)
+        # Optional: stability log
+        try:
+            import numpy as _np
+            rho = _np.max(_np.abs(_np.linalg.eigvals(Ak)))
+            if rho > 1.05:
+                print(f"[GA-STM WARN] t={current_time:.3f}s dt={dt:.3f}s spectral_radius(Ak)={rho:.4f}")
+        except Exception:
+            pass
+        dv = np.asarray(delta_v, dtype=float).reshape(-1)
+        assert dv.shape[0] == 3, "delta_v must be 3-dim"
+        # Impulse at the beginning of the step
+        x_plus = self.relative_state.copy()
+        x_plus[3:6] += dv  # instantaneous velocity jump
+        self.relative_state = Ak @ x_plus
+        if not np.isfinite(self.relative_state).all():
+            raise FloatingPointError("GA-STM state became non-finite after impulse propagation")
+        return self.relative_state
+
