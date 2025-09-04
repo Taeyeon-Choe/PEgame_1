@@ -122,8 +122,17 @@ class EvasionTrackingCallback(BaseCallback):
             'buffer_time': buffer_time,
             'evader_elements': info.get('initial_evader_orbital_elements', {}),
             'pursuer_elements': info.get('initial_pursuer_orbital_elements', {}),
-            'initial_distance': info.get('initial_relative_distance', 0),
-            'final_distance': info.get('final_relative_distance', 0)
+            'initial_distance': (
+                info.get('initial_relative_distance') or
+                info.get('initial_distance') or
+                info.get('initial_distance_m') or 0
+            ),
+            'final_distance': (
+                info.get('final_relative_distance') or
+                info.get('final_distance') or
+                info.get('relative_distance_m') or
+                info.get('relative_distance') or 0
+            )
         }
         self.episodes_info.append(episode_info)
         
