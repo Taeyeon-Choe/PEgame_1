@@ -20,6 +20,10 @@ from training.callbacks import (
     EarlyStoppingCallback,
     EphemerisLoggerCallback,
 )
+from utils.system_info import patch_sb3_system_info
+
+# 시스템 정보에 추가 패키지 버전 기록
+patch_sb3_system_info()
 
 
 class SACTrainer:
