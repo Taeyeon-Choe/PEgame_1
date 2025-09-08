@@ -1082,7 +1082,10 @@ class PursuitEvasionEnv(gym.Env):
         )
 
         # 보상 계산
-        if isinstance(self.reward_history[-1], dict):
+        if len(self.reward_history) == 0:
+            mean_evader_reward = 0.0
+            mean_pursuer_reward = 0.0
+        elif isinstance(self.reward_history[-1], dict):
             evader_rewards = [r.get("evader", 0) for r in self.reward_history]
             pursuer_rewards = [r.get("pursuer", 0) for r in self.reward_history]
             mean_evader_reward = np.mean(evader_rewards)
