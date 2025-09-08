@@ -119,7 +119,8 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
     print(f"\n=== 모델 평가 시작 ({n_tests} 시나리오) ===")
     
     # 평가용 단일 환경
-    env = PursuitEvasionEnv(config)
+    env = (PursuitEvasionEnvGASTM(config)
+           if config.environment.use_gastm else PursuitEvasionEnv(config))
     
     # 모델 로드
     try:
@@ -171,7 +172,8 @@ def run_demonstration(model_path: str, config: ProjectConfig):
     """데모 실행"""
     print("\n=== 데모 실행 ===")
     
-    env = PursuitEvasionEnv(config)
+    env = (PursuitEvasionEnvGASTM(config)
+           if config.environment.use_gastm else PursuitEvasionEnv(config))
     
     try:
         model = SAC.load(model_path, env=env)
