@@ -59,7 +59,7 @@ class GASTMPropagator:
         
         ns_elements = np.zeros(6)
         ns_elements[0] = coe['a']
-        ns_elements[1] = coe['omega'] + f  # True Longitude
+        ns_elements[1] = coe['omega'] + f  # true longitude θ = f + ω
         ns_elements[2] = coe['i']
         ns_elements[3] = coe['e'] * np.cos(coe['omega'])  # q1
         ns_elements[4] = coe['e'] * np.sin(coe['omega'])  # q2
@@ -70,25 +70,32 @@ class GASTMPropagator:
     def _compute_discrete_matrices(self, dt: float, current_time: float) -> tuple:
         """이산 상태 및 입력 행렬 계산 (캐싱 포함)"""
         # 캐시 확인
-        cache_key = (current_time, dt)
+        cache_key = (current_time, dt, getattr(self.ga_stm, "samples", None))
         if cache_key in self._matrix_cache:
             if self.debug_mode:
                 print(f"Using cached matrices for t={current_time}, dt={dt}")
             return self._matrix_cache[cache_key]
         
         # 새로운 행렬 계산
-        self.ga_stm.dt = dt
-        self.ga_stm.timeParams = {
-            't0': current_time, 
-            'dt': dt, 
-            'tf': current_time + dt
-        }
+        self.ga_stm.dt = float(dt)
+        self.ga_stm.t0 = float(current_time)
+        self.ga_stm.tf = float(current_time + dt)
         self.ga_stm.makeTimeVector()
         self.ga_stm.makeDiscreteMatrices()
         
-        Ak = self.ga_stm.Ak[:, :, -1]
-        Bk = self.ga_stm.Bk[:, :, -1]
-        
+        Ak_int = self.ga_stm.Ak[:, :, -1]
+        Bk_int = self.ga_stm.Bk[:, :, -1]
+        # Permutation: std [x,y,z,vx,vy,vz]  <->  int [x,vx,y,vy,z,vz]
+        P = np.array([
+            [1,0,0,0,0,0],
+            [0,0,0,1,0,0],
+            [0,1,0,0,0,0],
+            [0,0,0,0,1,0],
+            [0,0,1,0,0,0],
+            [0,0,0,0,0,1],
+        ], dtype=float)
+        Ak = P.T @ Ak_int @ P
+        Bk = P.T @ Bk_int    # accel-input용일 때        
         # 캐시 저장 (최대 10개 유지)
         if len(self._matrix_cache) > 10:
             self._matrix_cache.clear()
@@ -188,8 +195,11 @@ class GASTMPropagator:
         assert dv.shape[0] == 3, "delta_v must be 3-dim"
         # Impulse at the beginning of the step
         x_plus = self.relative_state.copy()
-        x_plus[3:6] += dv  # instantaneous velocity jump
+        # std 순서에서 속도 성분에 임펄스 적용
+        x_plus[3:6] += dv
+        # 표준 순서용 Ak로 전파
         self.relative_state = Ak @ x_plus
+        
         if not np.isfinite(self.relative_state).all():
             raise FloatingPointError("GA-STM state became non-finite after impulse propagation")
         return self.relative_state
