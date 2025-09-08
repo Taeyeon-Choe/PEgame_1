@@ -111,7 +111,10 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         evader_reward, pursuer_reward, info = self._calculate_rewards(
             done, termination_info, delta_v_e_mag
         )
-        
+
+        # [중요] 기본 환경과 동일하게 보상 히스토리 기록 (analyze_results 안전성 보장)
+        self.reward_history.append({"evader": evader_reward, "pursuer": pursuer_reward})
+
         # 6. 관측값 생성 및 반환
         observed_state = self.observe(self.state)
         normalized_obs = self._normalize_obs(observed_state, self.pursuer_last_action)
