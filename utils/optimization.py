@@ -82,10 +82,11 @@ class BatchProcessor:
         """벡터화된 환경 스텝"""
         if isinstance(actions, torch.Tensor):
             actions = actions.cpu().numpy()
-        
+
         # 병렬 스텝 실행
-        observations, rewards, dones, infos = envs.step(actions)
-        
+        observations, rewards, terminated, truncated, infos = envs.step(actions)
+        dones = np.logical_or(terminated, truncated)
+
         return observations, rewards, dones, infos
 
 
@@ -165,26 +166,26 @@ def optimize_environment(env_class):
             if self.config.training.use_gpu:
                 self.gpu_optimizer.optimize_memory()
         
-        def reset(self):
+        def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
             # 메모리 재사용
             if hasattr(self, 'state'):
                 self.state_pool.return_buffer(self.state)
-                
-            obs = super().reset()
-            return obs
-        
+
+            obs, info = super().reset(seed=seed, options=options)
+            return obs, info
+
         def step(self, action):
             # 배치 처리 준비
             if isinstance(action, torch.Tensor):
                 action = action.cpu().numpy()
-                
-            obs, reward, done, info = super().step(action)
-            
+
+            obs, reward, terminated, truncated, info = super().step(action)
+
             # 주기적 메모리 정리
             if self.step_count % 1000 == 0 and self.config.training.use_gpu:
                 self.gpu_optimizer.clear_cache()
-                
-            return obs, reward, done, info
+
+            return obs, reward, terminated, truncated, info
     
     return OptimizedEnv
 
