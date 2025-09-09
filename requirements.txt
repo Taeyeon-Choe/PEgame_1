@@ -5,7 +5,6 @@
 torch==2.6.0+cu124     # GPU 보장 필요로 예외적으로 고정
 stable-baselines3>=2.7.0a1,<2.8.0a0
 gymnasium>=1.1.0,<2.0.0
-gym>=0.26,<0.27
 shimmy>=2.0.0,<2.1.0
 
 # Scientific Computing

@@ -142,7 +142,7 @@ class ModelEvaluator:
         Returns:
             시나리오 실행 결과
         """
-        obs = self.env.reset()
+        obs, _ = self.env.reset()
         done = False
 
         # 데이터 수집
@@ -160,7 +160,8 @@ class ModelEvaluator:
             normalized_action, _ = self.model.predict(obs, deterministic=deterministic)
             
             # 환경 스텝
-            obs, reward, done, info = self.env.step(normalized_action)
+            obs, reward, terminated, truncated, info = self.env.step(normalized_action)
+            done = terminated or truncated
             step_count += 1
 
             # 보상 기록

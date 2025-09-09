@@ -7,8 +7,8 @@ import math
 from scipy.integrate import solve_ivp
 from collections import deque
 import copy
-import gym
-from gym import spaces
+import gymnasium as gym
+from gymnasium import spaces
 from typing import Dict, Tuple, Any, Optional
 
 from utils.constants import (
@@ -313,8 +313,11 @@ class PursuitEvasionEnv(gym.Env):
 
         return relative_state
 
-    def reset(self) -> np.ndarray:
+    def reset(
+        self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
+    ) -> Tuple[np.ndarray, Dict]:
         """환경 초기화"""
+        super().reset(seed=seed)
         # 기준 궤도 재설정 (매 에피소드 무작위화)
         self._init_chief_orbit(randomize=True)
 
@@ -367,7 +370,7 @@ class PursuitEvasionEnv(gym.Env):
         # 관측값 정규화
         normalized_obs = self._normalize_obs(observed_state, self.pursuer_last_action)
 
-        return normalized_obs
+        return normalized_obs, {}
 
     def observe(self, state: np.ndarray) -> np.ndarray:
         """센서 모델: 노이즈와 관측 제한이 있는 상태 반환"""
@@ -489,7 +492,9 @@ class PursuitEvasionEnv(gym.Env):
         current_orbit_index = self.complete_orbits % 3
         return self.orbit_modes[current_orbit_index]
 
-    def step(self, normalized_action_e: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
+    def step(
+        self, normalized_action_e: np.ndarray
+    ) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """환경 스텝 실행 - 수정된 버전"""
         # 현재 궤도 모드 확인
         self.current_orbit_mode = self.get_current_orbit_mode()
@@ -557,9 +562,10 @@ class PursuitEvasionEnv(gym.Env):
                 print(f"궤도 {self.complete_orbits} 완료, 다음 모드: {new_mode}")
     
         # 종료 조건 확인
-        done, termination_info = self.check_orbital_period_termination()
-    
+        terminated, truncated, termination_info = self.check_orbital_period_termination()
+
         # 보상 계산
+        done = terminated or truncated
         evader_reward, pursuer_reward, info = self._calculate_rewards(
             done, termination_info, delta_v_e_mag
         )
@@ -637,7 +643,7 @@ class PursuitEvasionEnv(gym.Env):
                 }
             })
     
-        return normalized_obs, evader_reward, done, info
+        return normalized_obs, evader_reward, terminated, truncated, info
 
     def _apply_evader_delta_v(self, delta_v_e: np.ndarray):
         """회피자 델타-V 적용 및 궤도 업데이트"""
@@ -868,7 +874,7 @@ class PursuitEvasionEnv(gym.Env):
         if np.isnan(self.state).any():
             self.state = np.nan_to_num(self.state, nan=0.0, posinf=1e6, neginf=-1e6)
 
-    def check_orbital_period_termination(self) -> Tuple[bool, Dict]:
+    def check_orbital_period_termination(self) -> Tuple[bool, bool, Dict]:
         """3궤도 주기를 고려한 종료 조건 확인"""
         rho_mag = np.linalg.norm(self.state[:3])
 
@@ -892,7 +898,7 @@ class PursuitEvasionEnv(gym.Env):
                         "orbit_consistency": f"{capture_ratio:.1%} over {self.complete_orbits} orbits",
                         "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
                     }
-                    return True, self.termination_details
+                    return True, False, self.termination_details
 
         # 2. 추진제 소진
         if self.total_delta_v_e > self.max_delta_v_budget:
@@ -905,7 +911,7 @@ class PursuitEvasionEnv(gym.Env):
                 "complete_orbits": self.complete_orbits,
                 "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
             }
-            return True, self.termination_details
+            return True, False, self.termination_details
 
         # 3. 최대 단계 초과 (궤도 주기 제한 옵션 적용)
         if self.step_count >= self.max_steps or (
@@ -920,7 +926,7 @@ class PursuitEvasionEnv(gym.Env):
                 "complete_orbits": self.complete_orbits,
                 "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
             }
-            return True, self.termination_details
+            return False, True, self.termination_details
 
         # 4. 회피 분석 (게임 모드에서의 성과를 중심으로)
         if rho_mag > self.evasion_distance and self.current_orbit_mode == 'game':
@@ -954,7 +960,7 @@ class PursuitEvasionEnv(gym.Env):
                                 "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
                                 "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
                             }
-                            return True, self.termination_details
+                            return True, False, self.termination_details
 
                         elif min_safety_score > SAFETY_THRESHOLDS["conditional_evasion"] and self.complete_orbits >= 1:
                             self.termination_details = {
@@ -968,7 +974,7 @@ class PursuitEvasionEnv(gym.Env):
                                 "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
                                 "game_orbits": sum(1 for i in range(self.complete_orbits + 1) if self.orbit_modes[i % 3] == 'game'),
                             }
-                            return True, self.termination_details
+                            return True, False, self.termination_details
         else:
             # 회피 거리 미달 시 히스토리 일부만 제거 (부드러운 전환)
             if len(self.evasion_status_history) > 0 and self.current_orbit_mode == 'game':
@@ -976,7 +982,7 @@ class PursuitEvasionEnv(gym.Env):
             if len(self.safety_score_history) > 0 and self.current_orbit_mode == 'game':
                 self.safety_score_history.popleft()
 
-        return False, {}
+        return False, False, {}
 
     def _perform_safety_analysis(self) -> Dict:
         """안전도 분석 수행 (간단한 버전)"""

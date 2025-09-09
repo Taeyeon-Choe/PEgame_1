@@ -122,10 +122,11 @@ print(f"액션 공간: {env.action_space}")
 print(f"관측 공간: {env.observation_space}")
 
 # 랜덤 에피소드 실행
-obs = env.reset()
+obs, info = env.reset()
 for _ in range(100):
     action = env.action_space.sample()
-    obs, reward, done, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(action)
+    done = terminated or truncated
     if done:
         print(f"에피소드 종료: {info['outcome']}")
         break
@@ -335,7 +336,7 @@ config.training.verbose = 2
 ```python
 # 단계별 상태 출력
 env = PursuitEvasionEnv(config)
-obs = env.reset()
+obs, _ = env.reset()
 print(f"초기 상태: {env.state}")
 print(f"초기 거리: {np.linalg.norm(env.state[:3]):.0f}m")
 ```

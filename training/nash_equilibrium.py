@@ -113,15 +113,16 @@ class NashEquilibriumTrainer(SACTrainer):
         strategy_performance = []
         
         for episode in range(episodes):
-            obs = self.env.reset()
+            obs, _ = self.env.reset()
             done = False
             episode_reward = 0
-            
+
             # 에피소드 실행
             while not done:
                 # 회피자 액션 (현재 정책 사용)
                 action, _ = self.model.predict(obs, deterministic=True)
-                obs, reward, done, info = self.env.step(action)
+                obs, reward, terminated, truncated, info = self.env.step(action)
+                done = terminated or truncated
                 episode_reward += reward
             
             # 결과 기록

@@ -47,17 +47,18 @@ class TestIntegration:
         env = PursuitEvasionEnv(config)
         
         # 환경 리셋
-        obs = env.reset()
+        obs, _ = env.reset()
         
         # 액션 공간 확인
         action = env.action_space.sample()
         
         # 스텝 실행
-        next_obs, reward, done, info = env.step(action)
+        next_obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
         
         # 기본 호환성 확인
         assert obs.shape == env.observation_space.shape
         assert action.shape == env.action_space.shape
         assert next_obs.shape == env.observation_space.shape
-        
+
         env.close()

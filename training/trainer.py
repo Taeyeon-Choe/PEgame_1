@@ -336,14 +336,15 @@ class SACTrainer:
             eval_env = PursuitEvasionEnv(self.config)
 
         for episode in range(n_episodes):
-            obs = eval_env.reset()
+            obs, _ = eval_env.reset()
             episode_reward = 0
             episode_length = 0
             done = False
 
             while not done:
                 action, _ = self.model.predict(obs, deterministic=deterministic)
-                obs, reward, done, info = eval_env.step(action)
+                obs, reward, terminated, truncated, info = eval_env.step(action)
+                done = terminated or truncated
                 episode_reward += reward
                 episode_length += 1
 

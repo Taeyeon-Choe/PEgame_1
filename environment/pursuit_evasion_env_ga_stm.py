@@ -4,7 +4,7 @@ PEgame 환경: GASTMPropagator를 사용한 STM 통합
 """
 
 import numpy as np
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 from environment.pursuit_evasion_env import PursuitEvasionEnv
 from orbital_mechanics.ga_stm_propagator import GASTMPropagator
 from orbital_mechanics.orbit import ChiefOrbit
@@ -30,10 +30,12 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         self.use_gastm = use_gastm
         self.gastm_propagator = None
 
-    def reset(self) -> np.ndarray:
+    def reset(
+        self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
+    ) -> Tuple[np.ndarray, Dict]:
         """환경을 리셋하고, 필요 시 GASTMPropagator를 재초기화합니다."""
-        obs = super().reset()
-        
+        obs, info = super().reset(seed=seed, options=options)
+
         if self.use_gastm:
             # 새로운 초기 조건으로 GASTMPropagator 초기화
             self.gastm_propagator = GASTMPropagator(
@@ -41,7 +43,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
                 initial_relative_state=self.state,
                 config=self.config
             )
-        return obs
+        return obs, info
 
     def _simulate_relative_motion(self):
         """상대 운동 시뮬레이션 (모드에 따라 다른 방법 사용)"""
@@ -65,10 +67,10 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
                 self.evader_orbit, self.state, self.t
             )
 
-    def step(self, normalized_action_e: np.ndarray) -> Tuple[np.ndarray, float, bool, Dict]:
-        """
-        환경 스텝 실행
-        """
+    def step(
+        self, normalized_action_e: np.ndarray
+    ) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+        """환경 스텝 실행"""
         # 1. 회피자(Evader) 액션 처리
         action_e = self._denormalize_action(normalized_action_e)
         delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
@@ -107,7 +109,8 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         self.step_count += 1
         
         # 5. 종료 조건 및 보상 계산
-        done, termination_info = self.check_orbital_period_termination()
+        terminated, truncated, termination_info = self.check_orbital_period_termination()
+        done = terminated or truncated
         evader_reward, pursuer_reward, info = self._calculate_rewards(
             done, termination_info, delta_v_e_mag
         )
@@ -139,7 +142,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         info.setdefault('final_relative_distance', final_dist)
         info.setdefault('final_distance', final_dist)
     
-        return normalized_obs, evader_reward, done, info
+        return normalized_obs, evader_reward, terminated, truncated, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 
                                   control_sequence: Optional[np.ndarray] = None) -> Dict:
@@ -178,7 +181,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         nonlinear_states = [initial_state.copy()]
         
         for i in range(n_steps):
-            obs, _, _, _ = self.step(control_sequence[i])
+            obs, _, _, _, _ = self.step(control_sequence[i])
             nonlinear_states.append(self.state.copy())
         
         # 초기 상태와 궤도 요소로 복원
@@ -205,7 +208,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         gastm_states = [initial_state.copy()]
         
         for i in range(n_steps):
-            obs, _, _, _ = self.step(control_sequence[i])
+            obs, _, _, _, _ = self.step(control_sequence[i])
             gastm_states.append(self.state.copy())
         
         # 배열로 변환
@@ -251,14 +254,14 @@ if __name__ == "__main__":
     env = PursuitEvasionEnvGASTM(config, use_gastm=True)
     
     # 환경 리셋
-    obs = env.reset()
+    obs, _ = env.reset()
     print(f"초기 관측값 형상: {obs.shape}")
     print(f"초기 상대 거리: {np.linalg.norm(env.state[:3]):.1f} m")
     
     # 단일 스텝 테스트
     print("\nGA STM으로 단일 스텝 테스트...")
     action = np.array([-0.1, 0.0, 0.0])  # 회피자 액션만 (추격자는 자동)
-    obs, reward, done, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(action)
     print(f"스텝 후 - 거리: {info['relative_distance_m']:.2f} m")
     print(f"동역학 모드: {info['dynamics_mode']}")
     

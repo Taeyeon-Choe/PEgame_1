@@ -27,7 +27,7 @@ class TestPursuitEvasionEnv:
 
     def test_reset(self):
         """리셋 기능 테스트"""
-        obs = self.env.reset()
+        obs, _ = self.env.reset()
 
         # 관측값이 올바른 형태인지 확인
         assert obs.shape == (9,)
@@ -39,18 +39,20 @@ class TestPursuitEvasionEnv:
 
     def test_step(self):
         """스텝 기능 테스트"""
-        obs = self.env.reset()
+        obs, _ = self.env.reset()
 
         # 랜덤 액션 생성
         action = self.env.action_space.sample()
 
         # 스텝 실행
-        next_obs, reward, done, info = self.env.step(action)
+        next_obs, reward, terminated, truncated, info = self.env.step(action)
+        done = terminated or truncated
 
         # 결과 검증
         assert next_obs.shape == (9,)
         assert isinstance(reward, (int, float))
-        assert isinstance(done, bool)
+        assert isinstance(terminated, bool)
+        assert isinstance(truncated, bool)
         assert isinstance(info, dict)
         assert not np.isnan(next_obs).any()
         assert "relative_distance_m" in info
@@ -63,7 +65,8 @@ class TestPursuitEvasionEnv:
 
         for _ in range(10):
             action = self.env.action_space.sample()
-            obs, reward, done, info = self.env.step(action)
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            done = terminated or truncated
 
             if done:
                 break
@@ -78,7 +81,8 @@ class TestPursuitEvasionEnv:
         # 강제로 포획 상황 만들기
         self.env.state[:3] = np.array([100, 100, 100])  # 매우 가까운 거리
 
-        obs, reward, done, info = self.env.step(np.zeros(3))
+        obs, reward, terminated, truncated, info = self.env.step(np.zeros(3))
+        done = terminated or truncated
 
         # 포획 상황에서는 버퍼 시간이 필요하므로 즉시 종료되지 않을 수 있음
         # 단지 시스템이 크래시하지 않는지만 확인
@@ -89,6 +93,6 @@ class TestPursuitEvasionEnv:
         config = get_config(debug_mode=True)
         config.environment.use_gastm = True
         env = PursuitEvasionEnvGASTM(config)
-        obs = env.reset()
+        obs, _ = env.reset()
         assert obs.shape == (9,)
         env.close()
