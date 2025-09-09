@@ -10,6 +10,7 @@ import copy
 import gymnasium as gym
 from gymnasium import spaces
 from typing import Dict, Tuple, Any, Optional
+from orbital_mechanics.coordinate_transforms import lvlh_to_eci
 
 from utils.constants import (
     MU_EARTH,
@@ -129,6 +130,22 @@ class PursuitEvasionEnv(gym.Env):
         self.evasion_buffer_steps = self.config.evasion_buffer_steps
         self.safety_buffer_steps = self.config.safety_buffer_steps
 
+    # --- SB3 VecEnv interop helpers (safe across SubprocVecEnv/DummyVecEnv) ---
+    def get_absolute_states(self):
+        """Return current absolute ECI states for evader & pursuer.
+
+        Returns:
+            t (float): current simulation time [s]
+            r_e, v_e, r_p, v_p (np.ndarray): ECI position/velocity for evader and pursuer
+        Note:
+            Designed to be small/picklable so it can be called via VecEnv.env_method.
+        """
+        t = float(getattr(self, 't', 0.0))
+        # Evader absolute state from chief orbit
+        r_e, v_e = self.evader_orbit.get_position_velocity(t)
+        # Convert LVLH relative state to pursuer absolute ECI
+        r_p, v_p = lvlh_to_eci(r_e, v_e, self.state)
+        return t, r_e, v_e, r_p, v_p
     def _init_chief_orbit(self, randomize: bool = False):
         """기준 궤도 초기화
 
