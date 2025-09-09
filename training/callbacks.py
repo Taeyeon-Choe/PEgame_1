@@ -523,13 +523,25 @@ class EphemerisLoggerCallback(BaseCallback):
         
         # 기록 중일 때만 데이터 수집
         if self.is_recording:
-            # ECI 좌표 계산
-            r_e, v_e = self.env.evader_orbit.get_position_velocity(self.env.t)
-            r_p, v_p = lvlh_to_eci(r_e, v_e, self.env.state)
-            
-            self.current_episode_data['times'].append(self.env.t)
+        # ECI 좌표 계산 (VecEnv 안전 접근)
+            try:
+                # 벡터 환경(Subproc/Dummy)인 경우: env_method 사용
+                if hasattr(self.training_env, 'env_method'):
+                    t, r_e, v_e, r_p, v_p = self.training_env.env_method('get_absolute_states', indices=0)[0]
+                else:
+                    # 단일 환경인 경우 직접 접근
+                    t = getattr(self.env, 't', 0.0)
+                    r_e, v_e = self.env.evader_orbit.get_position_velocity(t)
+                    r_p, v_p = lvlh_to_eci(r_e, v_e, self.env.state)
+            except Exception as e:
+                if self.verbose > 0:
+                    print(f"[EphemerisLogger] 상태 조회 실패: {e}")
+                return True
+
+            self.current_episode_data['times'].append(t)
             self.current_episode_data['evader_states'].append(np.concatenate((r_e, v_e)))
             self.current_episode_data['pursuer_states'].append(np.concatenate((r_p, v_p)))
+        
         
         # 에피소드 종료 확인
         done = self.locals.get('dones', [False])[0]
