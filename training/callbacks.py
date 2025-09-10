@@ -70,9 +70,19 @@ class EvasionTrackingCallback(BaseCallback):
         # 각 환경 처리
         for env_idx, done in enumerate(dones):
             if done:
-                # 'final_info' 키가 있으면 이를 사용하고,
-                # 없으면 현재 info 데이터를 사용해 호환성을 높인다.
-                final_info = infos[env_idx].get('final_info') or infos[env_idx]
+                # Robust extraction across SubprocVecEnv/DummyVecEnv & Gymnasium:
+                # - Guard against empty/short `infos`
+                # - Clamp `env_idx` to valid range
+                # - Handle Gymnasium sometimes returning list for `final_info`
+                if not isinstance(infos, (list, tuple)) or len(infos) == 0:
+                    # Nothing to log this step (can happen due to async/timing); just continue
+                    return True
+                # clamp env_idx into [0, len(infos)-1]
+                env_idx = max(0, min(env_idx, len(infos) - 1))
+                _fi = infos[env_idx].get('final_info')
+                if isinstance(_fi, (list, tuple)):
+                    _fi = _fi[0] if _fi else None
+                final_info = _fi or infos[env_idx]
                 if final_info:
                     self._process_episode_end(final_info, env_idx)
         
