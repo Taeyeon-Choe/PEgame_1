@@ -64,7 +64,9 @@ class EvasionTrackingCallback(BaseCallback):
 
         if not isinstance(dones, (list, np.ndarray)):
             dones = [dones]
-        if not isinstance(infos, list):
+        # SB3 2.x returns infos as Tuple[Dict]; DummyVecEnv uses list
+        # → treat both uniformly, wrapping only non-sequence objects
+        if not isinstance(infos, (list, tuple)):
             infos = [infos]
 
         # 각 환경 처리
