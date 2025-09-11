@@ -14,7 +14,7 @@ import json
 import csv
 
 from utils.constants import PLOT_PARAMS, SAFETY_THRESHOLDS, R_EARTH
-
+from scipy.io import savemat
 
 def setup_matplotlib():
     """Matplotlib 설정"""
@@ -327,7 +327,20 @@ def visualize_trajectory(states: np.ndarray,
         }
         with open(f"{save_path}_trajectory_data.json", 'w') as f:
             json.dump(trajectory_data, f, indent=2)
-    
+        # MATLAB 호환 형식 저장
+        mat_data = {
+            'x': states[:, 0],
+            'y': states[:, 1],
+            'z': states[:, 2],
+        }
+        # 속도 데이터가 있는 경우만 추가
+        if states.shape[1] > 3:
+            mat_data['vx'] = states[:, 3]
+        if states.shape[1] > 4:
+            mat_data['vy'] = states[:, 4]
+        if states.shape[1] > 5:
+            mat_data['vz'] = states[:, 5]
+        savemat(f"{save_path}_trajectory_data.mat", mat_data)
     plt.close()
     
     # 거리 변화 그래프
@@ -611,6 +624,23 @@ def plot_eci_trajectories(
     ``use_plotly``가 ``True``이면 Plotly 기반 인터랙티브 HTML을 생성한다.
     ``animate``가 ``True``이면 시간 순서대로 점이 나타나는 애니메이션을 반환한다.
     """
+    if save_path:
+        ephemeris_data = {
+            't': times.astype(float),  # float 타입 보장
+            'evader_x': evader_states[:, 0],
+            'evader_y': evader_states[:, 1],
+            'evader_z': evader_states[:, 2],
+            'pursuer_x': pursuer_states[:, 0],
+            'pursuer_y': pursuer_states[:, 1],
+            'pursuer_z': pursuer_states[:, 2],
+        }
+        # MAT 파일 저장
+        savemat(f"{save_path}_eci.mat", ephemeris_data)
+        # JSON 파일 저장 (리스트 변환)
+        json_data = {k: v.tolist() for k, v in ephemeris_data.items()}
+        with open(f"{save_path}_eci.json", 'w') as f:
+            json.dump(json_data, f, indent=2)
+
     if use_plotly:
         if animate:
             return _plot_eci_trajectories_plotly_live(
@@ -738,16 +768,7 @@ def plot_eci_trajectories(
     # 저장 또는 표시
     if save_path:
         plt.savefig(f"{save_path}_eci.png", dpi=PLOT_PARAMS['dpi'], bbox_inches='tight')
-        
-        # 데이터도 저장
-        ephemeris_data = {
-            't': times.tolist(),
-            'evader': evader_states.tolist(),
-            'pursuer': pursuer_states.tolist()
-        }
-        with open(f"{save_path}_eci.json", 'w') as f:
-            json.dump(ephemeris_data, f, indent=2)
-        
+      
         plt.close()
     else:
         plt.show()  # save_path가 없으면 화면에 표시
@@ -994,15 +1015,6 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
     if save_path:
         fig.write_html(f"{save_path}_eci.html")
         
-        # 데이터도 저장
-        ephemeris_data = {
-            't': times.tolist(),
-            'evader': evader_states.tolist(),
-            'pursuer': pursuer_states.tolist()
-        }
-        with open(f"{save_path}_eci.json", 'w') as f:
-            json.dump(ephemeris_data, f, indent=2)
-
     return fig
 
 
