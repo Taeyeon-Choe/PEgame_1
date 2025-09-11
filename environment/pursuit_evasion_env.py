@@ -401,104 +401,86 @@ class PursuitEvasionEnv(gym.Env):
         return observed_state
 
     def compute_interception_strategy(self, state: np.ndarray) -> np.ndarray:
-        """지능형 추격자의 추격 전략 계산 (개선된 버전)"""
-        rho = state[:3].copy()
-        v_rel = state[3:6].copy()
-        rho_mag = np.linalg.norm(rho)
+        """
+        Returns pursuer delta-v command [m/s] for this decision step.
+        """
+        rho = state[:3].astype(float)
+        vrel = state[3:].astype(float)
 
-        if rho_mag < 1e-10:
-            return np.zeros(3)
+        # Candidate directions (unit)
+        dirs = []
+        # direct closing
+        if np.linalg.norm(rho) > 1e-12:
+            dirs.append(-rho / (np.linalg.norm(rho) + 1e-12))
+        # relative velocity reverse
+        if np.linalg.norm(vrel) > 1e-12:
+            dirs.append(-vrel / (np.linalg.norm(vrel) + 1e-12))
+        # "HCW-like" heuristic dir (cross-track 과자극 제거: z=0)
+        hcw_dir = np.zeros(3, dtype=float)
+        if np.linalg.norm(rho[:2]) > 1e-12:
+            rt = rho[:2] / (np.linalg.norm(rho[:2]) + 1e-12)
+            rot = np.array([[np.sqrt(0.5), -np.sqrt(0.5)],
+                            [np.sqrt(0.5),  np.sqrt(0.5)]])
+            hcw_inplane = rot @ (-rt)
+            hcw_dir[:2] = hcw_inplane
+        dirs.append(hcw_dir / (np.linalg.norm(hcw_dir) + 1e-12))
 
-        prediction_time = np.clip(rho_mag / 1000.0, 1.0, 10.0) * self.dt
+        # === (3) Look-ahead 평가 ===
+        # GA-STM이면 Ak 기반 임펄스 look-ahead: x+=[0,0,0,Δv], x_next = Ak @ x+
+        # 아니면 기존의 선형 예측 rho + (vrel + dv) * T
+        best_cost = np.inf
+        best_action = np.zeros(3)
+        T = float(np.clip(np.linalg.norm(rho) / 1000.0, 1.0, 10.0)) * self.dt
 
-        if not hasattr(self, "_cached_directions"):
-            self._cached_directions = []
-            self._cache_counter = 0
+        use_gastm = getattr(self, "use_gastm", False) and hasattr(self, "gastm_propagator")
+        if use_gastm:
+            try:
+                Ak, _Bk = self.gastm_propagator._compute_discrete_matrices(self.dt, self.t)
+            except Exception:
+                use_gastm = False
 
-        if self._cache_counter % 10 == 0:
-            self._cached_directions = self.get_optimal_interception_directions(
-                rho, v_rel, prediction_time
-            )
-        self._cache_counter += 1
+        for d in dirs:
+            for s in [0.6, 0.8, 1.0]:
+                dv = s * self.delta_v_pmax * d
+                if use_gastm:
+                    # Impulse at step start (standard order): x+ then one-step Ak
+                    x_plus = state.copy()
+                    x_plus[3:6] += dv
+                    x_next = Ak @ x_plus
+                    future_pos = x_next[:3]
+                else:
+                    future_pos = rho + (vrel + dv) * T
+                # 연료 패널티(가벼움)
+                cost = np.linalg.norm(future_pos) + 0.1 * s * self.delta_v_pmax
+                if cost < best_cost:
+                    best_cost = cost
+                    best_action = dv.copy()
 
-        best_action = None
-        min_future_distance = float("inf")
-
-        for direction in self._cached_directions:
-            for scale in [0.6, 0.8, 1.0]:
-                test_action = scale * self.delta_v_pmax * direction
-                future_vel = v_rel + test_action
-                future_pos = rho + future_vel * prediction_time
-                future_distance = np.linalg.norm(future_pos)
-
-                cost = future_distance + 0.1 * scale * self.delta_v_pmax
-
-                if cost < min_future_distance:
-                    min_future_distance = cost
-                    best_action = test_action
-
-        if best_action is None:
-            best_action = -self.delta_v_pmax * rho / rho_mag
-
-        noise_scale = np.clip(
-            0.05 + 0.1 * (rho_mag / self.capture_distance - 1), 0.05, 0.3
-        )
-        noise = np.random.normal(0, noise_scale * self.delta_v_pmax, 3)
-
-        action_with_noise = best_action + noise
-        action_with_noise = np.clip(
-            action_with_noise, -self.delta_v_pmax, self.delta_v_pmax
-        )
-
-        return action_with_noise
-
-    def get_optimal_interception_directions(
-        self, rho: np.ndarray, v_rel: np.ndarray, prediction_time: float
-    ) -> list:
-        """최적 방향 세트 계산"""
-        # 1. 직접 추격
-        direct_dir = -rho / (np.linalg.norm(rho) + 1e-10)
-
-        # 2. 예측 위치 방향
-        future_pos = rho + v_rel * prediction_time
-        predictive_dir = -future_pos / (np.linalg.norm(future_pos) + 1e-10)
-
-        # 3. 상대 속도 반대 방향
-        vel_dir = -v_rel / (np.linalg.norm(v_rel) + 1e-10)
-
-        # 4. HCW 방향
-        hcw_dir = np.zeros(3)
-        rho_xy_norm = np.linalg.norm(rho[:2])
-        if rho_xy_norm > 0:
-            theta = np.arctan2(rho[1], rho[0])
-            lead_angle = np.pi / 4
-            hcw_dir[0] = -np.cos(theta + lead_angle)
-            hcw_dir[1] = -np.sin(theta + lead_angle)
-            if np.abs(rho[2]) > 0:
-                hcw_dir[2] = -np.sign(rho[2]) * 0.3
-            hcw_dir = hcw_dir / (np.linalg.norm(hcw_dir) + 1e-10)
-
-        # 5. 이전 성공 전략
-        history_dir = None
-        if len(self.pursuer_success_history) > 0 and np.random.random() < 0.3:
-            similar_states = []
-            for i, (old_rho, old_success) in enumerate(self.pursuer_success_history):
-                if (
-                    old_success
-                    and np.linalg.norm(rho - old_rho) < self.capture_distance * 3
-                ):
-                    similar_states.append(i)
-
-            if similar_states:
-                idx = np.random.choice(similar_states)
-                history_dir = self.pursuer_action_history[idx].copy()
-                history_dir = history_dir / (np.linalg.norm(history_dir) + 1e-10)
-
-        all_directions = [direct_dir, predictive_dir, vel_dir, hcw_dir]
-        if history_dir is not None:
-            all_directions.append(history_dir)
-
-        return all_directions
+        # === (2) 정렬(닫힘) 안전장치 + 노이즈 ===
+        # 노이즈 추가 전에 먼저 best_action을 닫힘방향으로 보정
+        dv_cmd = best_action.copy()
+        if np.dot(dv_cmd, -rho) < 0:
+            alpha = 0.20  # 닫힘 성분 최소 확보 비율
+            close_dir = -rho / (np.linalg.norm(rho) + 1e-12)
+            dv_cmd = (1 - alpha) * dv_cmd + alpha * self.delta_v_pmax * close_dir
+        # 탐색 노이즈
+        noise_scale = float(np.clip(0.05 + 0.1 * (np.linalg.norm(rho) / max(self.capture_distance,1.0) - 1.0),
+                                    0.05, 0.30))
+        noise = np.random.normal(0.0, noise_scale * self.delta_v_pmax, 3)
+        dv_cmd = dv_cmd + noise
+        # === (1) 벡터 노름 포화 ===
+        norm = np.linalg.norm(dv_cmd)
+        if norm > self.delta_v_pmax:
+            dv_cmd *= self.delta_v_pmax / (norm + 1e-12)
+        # 정렬 안전장치 재확인(노이즈로 깨졌을 수 있음)
+        if np.dot(dv_cmd, -rho) < 0:
+            alpha = 0.20
+            close_dir = -rho / (np.linalg.norm(rho) + 1e-12)
+            dv_cmd = (1 - alpha) * dv_cmd + alpha * self.delta_v_pmax * close_dir
+            n2 = np.linalg.norm(dv_cmd)
+            if n2 > self.delta_v_pmax:
+                dv_cmd *= self.delta_v_pmax / (n2 + 1e-12)
+        return dv_cmd
 
     def get_current_orbit_mode(self) -> str:
         """현재 궤도 주기에 따른 모드 반환"""
