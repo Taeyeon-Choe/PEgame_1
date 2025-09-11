@@ -18,6 +18,7 @@ from utils.constants import (
     ENV_PARAMS,
     BUFFER_PARAMS,
     SAFETY_THRESHOLDS,
+    ORBIT_BOUNDS,
 )
 from orbital_mechanics.orbit import ChiefOrbit
 from orbital_mechanics.dynamics import relative_dynamics_evader_centered, safe_relative_dynamics
@@ -150,8 +151,15 @@ class PursuitEvasionEnv(gym.Env):
         """기준 궤도 초기화
 
         Args:
-            randomize: True이면 반장축을 7000~8500km, 이심률을 0~0.5 범위에서
-                무작위로 샘플링한다.
+            randomize: True이면 `ORBIT_BOUNDS`에서 정의한 범위 내에서
+                근지점/원지점 고도와 경사각을 무작위로 샘플링한다.
+
+        Notes:
+            - 근지점/원지점 고도는 ORBIT_BOUNDS를 따른다
+            - 이심률은 선택된 두 고도로부터 계산한다
+            - 경사각은 ORBIT_BOUNDS에서 정의한 범위를 따른다
+            - 승교점 적경(RAAN), 근점편각(omega), 초기 평균근점이각(M0)은
+              설정값을 그대로 사용
         """
         from config.settings import default_config
 
@@ -159,24 +167,35 @@ class PursuitEvasionEnv(gym.Env):
 
         a = orbit_config.a
         e = orbit_config.e
+        i = orbit_config.i
 
         if randomize:
-            # 매 에피소드마다 넓은 범위에서 궤도 매개변수를 샘플링
-            # 근지점 고도가 지구 내부에 위치하지 않도록 최소 고도 조건을 적용
-            h_min = 450e3  # 최소 근지점 고도 (450 km)
+            # 근지점 고도 샘플링
+            perigee_altitude = np.random.uniform(
+                ORBIT_BOUNDS["perigee_altitude_min"],
+                ORBIT_BOUNDS["perigee_altitude_max"],
+            )
+            # 원지점 고도 샘플링 (근지점보다 크고 최대값 이하)
+            apogee_altitude = np.random.uniform(
+                perigee_altitude, ORBIT_BOUNDS["apogee_altitude_max"]
+            )
 
-            while True:
-                a = np.random.uniform(7000e3, 8500e3)  # 7000~8500 km
-                e = np.random.uniform(0.0, 0.5)
+            r_p = R_EARTH + perigee_altitude
+            r_a = R_EARTH + apogee_altitude
 
-                perigee_altitude = a * (1 - e) - R_EARTH
-                if perigee_altitude >= h_min:
-                    break
+            # 반장축과 이심률 계산
+            a = 0.5 * (r_a + r_p)
+            e = (r_a - r_p) / (r_a + r_p)
+
+            # 경사각 샘플링
+            i = np.random.uniform(
+                ORBIT_BOUNDS["inclination_min"], ORBIT_BOUNDS["inclination_max"]
+            )
 
         self.evader_orbit = ChiefOrbit(
             a=a,
             e=e,
-            i=orbit_config.i,
+            i=i,
             RAAN=orbit_config.RAAN,
             omega=orbit_config.omega,
             M0=orbit_config.M0,
