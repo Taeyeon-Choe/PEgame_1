@@ -36,9 +36,9 @@ ENV_PARAMS = {
     "max_delta_v_budget": 250.0,  # 최대 추진제 예산 (m/s)
     "max_initial_separation": 5e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
-    "use_gastm": False,
+    "use_gastm": True,
     # 궤도 모드 주기 사용 여부 (True: 3궤도 주기, False: 전체 max_steps 사용)
-    "use_orbit_cycles": True,
+    "use_orbit_cycles": False,
 }
 
 # 버퍼 시간 설정
