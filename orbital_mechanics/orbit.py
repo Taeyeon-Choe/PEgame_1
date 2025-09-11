@@ -215,14 +215,15 @@ class ChiefOrbit:
         # 새로운 속도
         v_eci_new = v_eci + delta_v_eci
         
-        # 새로운 궤도 요소 계산
-        new_elements = state_to_orbital_elements(r_eci, v_eci_new, self.mu)
-        
+
+        a_new, e_new, i_new, RAAN_new, omega_new, M_curr = state_to_orbital_elements(r_eci, v_eci_new, self.mu)
+        n_new = np.sqrt(self.mu / a_new**3)
+        # epoch_time 기준의 M0 역산 (epoch_time 유지)
+        M0_new = (M_curr - n_new * (t - self.epoch_time)) % (2*np.pi)
         # 궤도 요소 업데이트
-        self.a, self.e, self.i, self.RAAN, self.omega, self.M0 = new_elements
-        
-        # 평균 운동과 주기 재계산
-        self.n = np.sqrt(self.mu / self.a**3)
+        self.a, self.e, self.i, self.RAAN, self.omega, self.M0 = a_new, e_new, i_new, RAAN_new, omega_new, M0_new
+        # 평균 운동/주기 재계산
+        self.n = n_new
         self.period = 2 * np.pi / self.n
         
         # 상태 캐시 초기화
