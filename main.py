@@ -216,17 +216,18 @@ def interactive_mode():
             timesteps = int(timesteps) if timesteps else 50000
             
             # GA-STM 사용 여부
-            use_gastm = input("GA-STM 사용? (y/n, 기본값: n): ").strip().lower()
-            use_gastm = use_gastm == 'y'
-            
+            use_gastm = input("GA-STM 사용? (y/n, 기본값: y): ").strip().lower()
+            use_gastm = use_gastm != 'n'
+
             # 고급 설정 여부
-            advanced = input("고급 설정을 하시겠습니까? (y/n, 기본값: n): ").strip().lower()
+            advanced = input("고급 설정을 하시겠습니까? (y/n, 기본값: y): ").strip().lower()
+            advanced = advanced != 'n'
             
             config = get_config(experiment_name="interactive_training")
             config.training.total_timesteps = timesteps
             config.environment.use_gastm = use_gastm
-            
-            if advanced == 'y':
+
+            if advanced:
                 # c 파라미터
                 c_value = input(f"c 파라미터 (기본값: {config.environment.c}): ").strip()
                 if c_value:
@@ -253,10 +254,12 @@ def interactive_mode():
 
                 # 궤도 주기 모드 사용 여부
                 orbit_cycles = input(
-                    f"3궤도 주기 모드 사용? (y/n, 기본값: {'y' if config.environment.use_orbit_cycles else 'n'}): "
+                    "3궤도 주기 모드 사용? (y/n, 기본값: n): "
                 ).strip().lower()
                 if orbit_cycles:
                     config.environment.use_orbit_cycles = orbit_cycles == 'y'
+                else:
+                    config.environment.use_orbit_cycles = False
             
             print(f"\n학습 설정:")
             print(f"  - 타임스텝: {config.training.total_timesteps:,}")
@@ -283,10 +286,10 @@ def interactive_mode():
             n_tests = int(n_tests) if n_tests else 10
 
             # 평가 시에도 GA-STM 옵션 제공
-            use_gastm = input("평가 시 GA-STM 사용? (y/n, 기본값: n): ").strip().lower()
+            use_gastm = input("평가 시 GA-STM 사용? (y/n, 기본값: y): ").strip().lower()
 
             config = get_config(experiment_name="interactive_evaluation")
-            config.environment.use_gastm = use_gastm == 'y'
+            config.environment.use_gastm = use_gastm != 'n'
 
             # Delta-V 설정 입력
             delta_v_emax = input(
@@ -302,10 +305,12 @@ def interactive_mode():
                 config.environment.delta_v_pmax = float(delta_v_pmax)
 
             orbit_cycles = input(
-                f"3궤도 주기 모드 사용? (y/n, 기본값: {'y' if config.environment.use_orbit_cycles else 'n'}): "
+                "3궤도 주기 모드 사용? (y/n, 기본값: n): "
             ).strip().lower()
             if orbit_cycles:
                 config.environment.use_orbit_cycles = orbit_cycles == 'y'
+            else:
+                config.environment.use_orbit_cycles = False
 
             print("\n평가 설정:")
             print(f"  GA-STM 사용: {config.environment.use_gastm}")
