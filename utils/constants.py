@@ -20,6 +20,15 @@ DEFAULT_ORBIT_PARAMS = {
     "M0": 0.0,  # 초기 평균 근점이각 (rad)
 }
 
+# 기준 궤도 무작위화 범위
+ORBIT_BOUNDS = {
+    "perigee_altitude_min": 400e3,  # 근지점 고도 최소값 (m)
+    "perigee_altitude_max": 500e3,  # 근지점 고도 최대값 (m)
+    "apogee_altitude_max": 2500e3,  # 원지점 고도 최대값 (m)
+    "inclination_min": np.deg2rad(45.0),  # 경사각 최소값 (rad)
+    "inclination_max": np.deg2rad(60.0),  # 경사각 최대값 (rad)
+}
+
 # 환경 파라미터
 ENV_PARAMS = {
     "dt": 30.0,  # 시간 간격 (s)
