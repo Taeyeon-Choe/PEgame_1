@@ -460,12 +460,12 @@ class PursuitEvasionEnv(gym.Env):
         # 노이즈 추가 전에 먼저 best_action을 닫힘방향으로 보정
         dv_cmd = best_action.copy()
         if np.dot(dv_cmd, -rho) < 0:
-            alpha = 0.20  # 닫힘 성분 최소 확보 비율
+            alpha = 0.5  # 닫힘 성분 최소 확보 비율
             close_dir = -rho / (np.linalg.norm(rho) + 1e-12)
             dv_cmd = (1 - alpha) * dv_cmd + alpha * self.delta_v_pmax * close_dir
         # 탐색 노이즈
-        noise_scale = float(np.clip(0.05 + 0.1 * (np.linalg.norm(rho) / max(self.capture_distance,1.0) - 1.0),
-                                    0.05, 0.30))
+        noise_scale = float(np.clip(0.02 + 0.1 * (np.linalg.norm(rho) / max(self.capture_distance,1.0) - 1.0),
+                                    0.02, 0.15))
         noise = np.random.normal(0.0, noise_scale * self.delta_v_pmax, 3)
         dv_cmd = dv_cmd + noise
         # === (1) 벡터 노름 포화 ===
