@@ -59,7 +59,7 @@ TRAINING_PARAMS = {
     "gamma": 0.98,
     "net_arch": [512, 512, 512],
     "save_freq": 10000,
-    "n_envs": multiprocessing.cpu_count(),
+    "n_envs": min(multiprocessing.cpu_count(), 14),
 }
 
 # 시각화 설정
