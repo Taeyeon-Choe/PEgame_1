@@ -300,9 +300,9 @@ class PursuitEvasionEnv(gym.Env):
     def initialize_with_accurate_dynamics(self) -> np.ndarray:
         """
         회피자(Evader) 궤도를 기준으로, 물리적으로 일관된
-        상대 상태(relative_state)를 5 km 이내에서 샘플링
+        상대 상태(relative_state)를 샘플링
         """
-        max_sep = 5_000.0
+        max_sep = self.max_initial_separation
         a_e = self.evader_orbit.a
         e_e = self.evader_orbit.e
         i_e = self.evader_orbit.i
@@ -335,7 +335,9 @@ class PursuitEvasionEnv(gym.Env):
                 break
         else:
             # 실패 시 기본값
-            print("WARNING: 5km 이내 궤도 샘플링 실패, 기본값 사용")
+            print(
+                f"WARNING: {max_sep/1000:.1f}km 이내 궤도 샘플링 실패, 기본값 사용"
+            )
             relative_state = np.array([2000.0, 1000.0, 500.0, 0.0, 0.0, 0.0])
 
         # 기록용 속성 저장
