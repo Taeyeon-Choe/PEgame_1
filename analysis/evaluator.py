@@ -8,9 +8,12 @@ import datetime
 from typing import Dict, List, Tuple, Optional, Any
 from stable_baselines3 import SAC
 from analysis.visualization import (
-    visualize_trajectory, plot_test_results,
-    plot_orbital_elements_comparison, create_summary_dashboard,
-    plot_eci_trajectories
+    visualize_trajectory,
+    plot_test_results,
+    plot_orbital_elements_comparison,
+    create_summary_dashboard,
+    plot_eci_trajectories,
+    plot_delta_v_components,
 )
 from analysis.metrics import calculate_performance_metrics, analyze_trajectory_quality
 from orbital_mechanics.coordinate_transforms import lvlh_to_eci
@@ -337,6 +340,11 @@ class ModelEvaluator:
         with open(f"{save_dir}/test_{scenario_id}_delta_v.json", "w") as f:
             import json
             json.dump(delta_v_data, f, indent=2)
+
+        # Delta-V 성분별 그래프 저장
+        plot_delta_v_components(
+            actions_e, actions_p, f"{save_dir}/test_{scenario_id}"
+        )
     
     def _save_evaluation_results(self, comprehensive_results: Dict,
                                results: List[Dict],

@@ -224,11 +224,53 @@ def plot_training_progress(success_rates: List[float],
         json.dump(all_training_data, f, indent=2)
 
 
-def visualize_trajectory(states: np.ndarray, 
+def plot_delta_v_components(
+    actions_e: np.ndarray, actions_p: np.ndarray, save_path: str
+) -> None:
+    """Evader와 Pursuer의 Delta-V 성분 그래프를 저장.
+
+    각 에이전트의 vx, vy, vz 성분을 스텝에 따라 플로팅한다.
+
+    Args:
+        actions_e: 회피자의 Delta-V 배열 (step x 3)
+        actions_p: 추격자의 Delta-V 배열 (step x 3)
+        save_path: 저장할 파일 경로 (확장자 제외)
+    """
+    setup_matplotlib()
+
+    steps = np.arange(actions_e.shape[0])
+    labels = ['vx', 'vy', 'vz']
+
+    # Evader plot
+    plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+    for i, label in enumerate(labels):
+        plt.plot(steps, actions_e[:, i], label=label)
+    plt.xlabel('Step')
+    plt.ylabel('Delta-V (m/s)')
+    plt.title('Evader Delta-V Components')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{save_path}_evader_delta_v.png", dpi=PLOT_PARAMS['dpi'])
+    plt.close()
+
+    # Pursuer plot
+    plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+    for i, label in enumerate(labels):
+        plt.plot(steps, actions_p[:, i], label=label)
+    plt.xlabel('Step')
+    plt.ylabel('Delta-V (m/s)')
+    plt.title('Pursuer Delta-V Components')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{save_path}_pursuer_delta_v.png", dpi=PLOT_PARAMS['dpi'])
+    plt.close()
+
+
+def visualize_trajectory(states: np.ndarray,
                         actions_e: Optional[np.ndarray] = None,
-                        actions_p: Optional[np.ndarray] = None, 
+                        actions_p: Optional[np.ndarray] = None,
                         title: str = "3D Trajectory",
-                        save_path: Optional[str] = None, 
+                        save_path: Optional[str] = None,
                         nash_info: Optional[float] = None,
                         safety_info: Optional[float] = None, 
                         buffer_time: Optional[float] = None):

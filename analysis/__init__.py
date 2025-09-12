@@ -12,7 +12,8 @@ from .visualization import (
     plot_zero_sum_analysis,
     plot_orbital_elements_comparison,
     plot_eci_trajectories,
-    create_summary_dashboard
+    create_summary_dashboard,
+    plot_delta_v_components,
 )
 from .metrics import (
     calculate_performance_metrics,
@@ -30,8 +31,8 @@ __all__ = [
     'visualize_trajectory', 'plot_training_progress',
     'plot_test_results', 'plot_outcome_distribution',
     'plot_zero_sum_analysis', 'plot_orbital_elements_comparison',
-    'plot_eci_trajectories',
-    'create_summary_dashboard',
+    'plot_eci_trajectories', 'create_summary_dashboard',
+    'plot_delta_v_components',
     'calculate_performance_metrics', 'calculate_distance_metrics',
     'calculate_efficiency_metrics', 'calculate_control_quality_metrics',
     'calculate_reward_metrics', 'calculate_safety_metrics',
