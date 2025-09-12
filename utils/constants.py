@@ -43,7 +43,7 @@ ENV_PARAMS = {
     "c": 0.01,  # 제어 비용 계수
     "max_steps": 1000,  # 최대 스텝 수
     "max_delta_v_budget": 250.0,  # 최대 추진제 예산 (m/s)
-    "max_initial_separation": 5e3,  # 최대 초기 분리 거리 (m)
+    "max_initial_separation": 3e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
     "use_gastm": True,
     # 궤도 모드 주기 사용 여부 (True: 3궤도 주기, False: 전체 max_steps 사용)
