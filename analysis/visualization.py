@@ -289,7 +289,7 @@ def visualize_trajectory(states: np.ndarray,
     
     # 행동 벡터 표시
     if actions_e is not None and actions_p is not None:
-        step = max(1, len(states) // 1000)
+        step = max(1, len(states) // 100)
         
         for i in range(0, len(states), step):
             if i < len(actions_e) and np.any(actions_e[i] != 0):
