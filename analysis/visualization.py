@@ -287,28 +287,41 @@ def visualize_trajectory(states: np.ndarray,
     # 그리드
     ax.grid(True, alpha=0.3)
     
-    # 행동 벡터 표시
+    # 행동 벡터 표시 - 실제 impulsive delta-v가 적용된 스텝마다 표시
     if actions_e is not None and actions_p is not None:
-        step = max(1, len(states) // 100)
-        
-        for i in range(0, len(states), step):
-            if i < len(actions_e) and np.any(actions_e[i] != 0):
-                # 회피자 액션 (원점에서)
-                ax.quiver(
-                    0, 0, 0,
-                    actions_e[i, 0], actions_e[i, 1], actions_e[i, 2],
-                    color=PLOT_PARAMS['colors']['evader'], 
-                    length=max_range/10, normalize=True, alpha=0.5
-                )
-            
-            if i < len(actions_p) and np.any(actions_p[i] != 0):
-                # 추격자 액션
-                ax.quiver(
-                    states[i, 0], states[i, 1], states[i, 2],
-                    actions_p[i, 0], actions_p[i, 1], actions_p[i, 2],
-                    color=PLOT_PARAMS['colors']['pursuer'], 
-                    length=max_range/10, normalize=True, alpha=0.5
-                )
+        # 각 에이전트의 delta-v가 0이 아닌 지점을 찾는다
+        impulse_e_indices = np.where(np.linalg.norm(actions_e, axis=1) > 0)[0]
+        impulse_p_indices = np.where(np.linalg.norm(actions_p, axis=1) > 0)[0]
+
+        # 회피자 액션 (원점 기준)
+        for i in impulse_e_indices:
+            ax.quiver(
+                0,
+                0,
+                0,
+                actions_e[i, 0],
+                actions_e[i, 1],
+                actions_e[i, 2],
+                color=PLOT_PARAMS["colors"]["evader"],
+                length=max_range / 10,
+                normalize=True,
+                alpha=0.5,
+            )
+
+        # 추격자 액션 (상대 좌표 위치에서)
+        for i in impulse_p_indices:
+            ax.quiver(
+                states[i, 0],
+                states[i, 1],
+                states[i, 2],
+                actions_p[i, 0],
+                actions_p[i, 1],
+                actions_p[i, 2],
+                color=PLOT_PARAMS["colors"]["pursuer"],
+                length=max_range / 10,
+                normalize=True,
+                alpha=0.5,
+            )
     
     plt.tight_layout()
     
