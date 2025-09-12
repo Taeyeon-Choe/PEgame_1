@@ -238,6 +238,12 @@ def plot_delta_v_components(
     """
     setup_matplotlib()
 
+    # Ensure the output directory exists so that savefig doesn't fail
+    save_dir = os.path.dirname(save_path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+
+    
     steps = np.arange(actions_e.shape[0])
     labels = ['vx', 'vy', 'vz']
 
