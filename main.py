@@ -133,11 +133,22 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
     
     evaluator = create_evaluator(model, env, config)
     results = evaluator.evaluate_multiple_scenarios(n_tests=n_tests)
-    
-    # 결과 출력
+
+    # 개별 테스트 결과 출력
+    individual = results.get('individual_results', [])
+    if individual:
+        print("\n테스트별 결과:")
+        for idx, res in enumerate(individual, 1):
+            outcome = "evaded" if res.get('success', False) else "captured"
+            print(f"  테스트 {idx}: {outcome}")
+
+    # 결과 요약 출력
     summary = results['summary']
+    total_tests = summary.get('total_tests', len(individual))
+    evaded = summary.get('success_count', 0)
+    captured = total_tests - evaded
     print(f"\n평가 결과 요약:")
-    print(f"  성공률: {summary.get('success_rate', 0):.1f}%")
+    print(f"  captured: {captured}, evaded: {evaded}")
     
     # avg_final_distance 키 확인 후 출력
     if 'avg_final_distance' in summary:
