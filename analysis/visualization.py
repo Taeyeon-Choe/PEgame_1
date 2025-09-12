@@ -278,9 +278,24 @@ def visualize_trajectory(states: np.ndarray,
                         title: str = "3D Trajectory",
                         save_path: Optional[str] = None,
                         nash_info: Optional[float] = None,
-                        safety_info: Optional[float] = None, 
-                        buffer_time: Optional[float] = None):
-    """3D 궤적 시각화"""
+                        safety_info: Optional[float] = None,
+                        buffer_time: Optional[float] = None,
+                        show_evader_actions: bool = False,
+                        arrow_length: float = 1.0):
+    """3D 궤적 시각화
+
+    Args:
+        states: 상대 좌표계에서의 상태 배열
+        actions_e: 회피자의 delta-v 기록
+        actions_p: 추격자의 delta-v 기록
+        title: 그래프 제목
+        save_path: 저장 경로 (확장자 제외)
+        nash_info: 내쉬 메트릭
+        safety_info: 안전도 메트릭
+        buffer_time: 버퍼 시간
+        show_evader_actions: 회피자 화살표 표시 여부
+        arrow_length: 화살표 길이 (normalize=True 기준)
+    """
     setup_matplotlib()
     
     fig = plt.figure(figsize=PLOT_PARAMS['figure_size_3d'])
@@ -337,24 +352,23 @@ def visualize_trajectory(states: np.ndarray,
     
     # 행동 벡터 표시 - 실제 impulsive delta-v가 적용된 스텝마다 표시
     if actions_e is not None and actions_p is not None:
-        # 각 에이전트의 delta-v가 0이 아닌 지점을 찾는다
-        impulse_e_indices = np.where(np.linalg.norm(actions_e, axis=1) > 0)[0]
         impulse_p_indices = np.where(np.linalg.norm(actions_p, axis=1) > 0)[0]
 
-        # 회피자 액션 (원점 기준)
-        for i in impulse_e_indices:
-            ax.quiver(
-                0,
-                0,
-                0,
-                actions_e[i, 0],
-                actions_e[i, 1],
-                actions_e[i, 2],
-                color=PLOT_PARAMS["colors"]["evader"],
-                length=max_range / 10,
-                normalize=True,
-                alpha=0.5,
-            )
+        if show_evader_actions:
+            impulse_e_indices = np.where(np.linalg.norm(actions_e, axis=1) > 0)[0]
+            for i in impulse_e_indices:
+                ax.quiver(
+                    0,
+                    0,
+                    0,
+                    actions_e[i, 0],
+                    actions_e[i, 1],
+                    actions_e[i, 2],
+                    color=PLOT_PARAMS["colors"]["evader"],
+                    length=arrow_length,
+                    normalize=True,
+                    alpha=0.5,
+                )
 
         # 추격자 액션 (상대 좌표 위치에서)
         for i in impulse_p_indices:
@@ -366,7 +380,7 @@ def visualize_trajectory(states: np.ndarray,
                 actions_p[i, 1],
                 actions_p[i, 2],
                 color=PLOT_PARAMS["colors"]["pursuer"],
-                length=max_range / 10,
+                length=arrow_length,
                 normalize=True,
                 alpha=0.5,
             )
