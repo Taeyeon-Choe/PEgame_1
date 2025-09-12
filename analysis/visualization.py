@@ -287,10 +287,9 @@ def visualize_trajectory(states: np.ndarray,
     # 그리드
     ax.grid(True, alpha=0.3)
     
-    # 행동 벡터 표시 (선택적)
+    # 행동 벡터 표시
     if actions_e is not None and actions_p is not None:
-        # 일부 행동만 표시 (가독성을 위해)
-        step = max(1, len(states) // 1)
+        step = max(1, len(states) // 1000)
         
         for i in range(0, len(states), step):
             if i < len(actions_e) and np.any(actions_e[i] != 0):
