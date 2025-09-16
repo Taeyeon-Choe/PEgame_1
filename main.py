@@ -142,6 +142,18 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
             outcome = "evaded" if res.get('success', False) else "captured"
             print(f"  테스트 {idx}: {outcome}")
 
+            pursuer_delta_v = res.get('pursuer_total_delta_v_ms')
+            if pursuer_delta_v is not None:
+                print(f"    추격자 총 delta-v: {pursuer_delta_v:.2f} m/s")
+            else:
+                print("    추격자 총 delta-v: 데이터 없음")
+
+            evader_delta_v = res.get('evader_total_delta_v_ms')
+            if evader_delta_v is not None:
+                print(f"    회피자 총 delta-v: {evader_delta_v:.2f} m/s")
+            else:
+                print("    회피자 총 delta-v: 데이터 없음")
+
     # 결과 요약 출력
     summary = results['summary']
     total_tests = summary.get('total_tests', len(individual))
