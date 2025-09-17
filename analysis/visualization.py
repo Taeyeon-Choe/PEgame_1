@@ -281,7 +281,7 @@ def visualize_trajectory(states: np.ndarray,
                         safety_info: Optional[float] = None,
                         buffer_time: Optional[float] = None,
                         show_evader_actions: bool = False,
-                        arrow_length: float = 1.0):
+                        arrow_length: Optional[float] = None):
     """3D 궤적 시각화
 
     Args:
@@ -294,7 +294,7 @@ def visualize_trajectory(states: np.ndarray,
         safety_info: 안전도 메트릭
         buffer_time: 버퍼 시간
         show_evader_actions: 회피자 화살표 표시 여부
-        arrow_length: 화살표 길이 (normalize=True 기준)
+        arrow_length: 화살표 길이 (normalize=True 기준). None이면 데이터 범위 기반 자동 결정
     """
     setup_matplotlib()
     
@@ -337,6 +337,12 @@ def visualize_trajectory(states: np.ndarray,
     z_range = z_max - z_min
 
     max_range = max(x_range, y_range, z_range)
+
+    # Delta-v 화살표가 축 스케일 대비 지나치게 작아지지 않도록 자동 길이 설정
+    if arrow_length is None:
+        scale_reference = max(max_range, 1.0)
+        arrow_length = 0.1 * scale_reference
+
     #if max_range == 0:
     #    max_range = 1.0
     #margin_ratio = 0.05  # 그래프가 너무 꽉 차지 않도록 약간의 여백
