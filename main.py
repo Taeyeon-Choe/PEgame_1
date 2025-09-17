@@ -25,6 +25,8 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 import torch
 
+torch.set_default_dtype(torch.float32)
+
 
 def setup_environment(config: ProjectConfig) -> PursuitEvasionEnv:
     """환경 설정 및 생성"""

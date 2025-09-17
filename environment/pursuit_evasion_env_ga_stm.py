@@ -74,7 +74,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         # 1. 회피자(Evader) 액션 처리
         action_e = self._denormalize_action(normalized_action_e)
         delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
-        delta_v_e_mag = np.linalg.norm(delta_v_e)
+        delta_v_e_mag = float(np.linalg.norm(delta_v_e))
         self.total_delta_v_e += delta_v_e_mag
     
         # 회피자 기동 적용 (궤도 변경)
@@ -84,9 +84,10 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         # 2. 추격자(Pursuer) 액션 계산
         if self.step_count % self.k == 0:
             delta_v_p = self.compute_interception_strategy(self.state)
+            delta_v_p = np.asarray(delta_v_p, dtype=np.float32)
             self.pursuer_last_action = delta_v_p
         else:
-            delta_v_p = np.zeros(3)
+            delta_v_p = np.zeros(3, dtype=np.float32)
     
         # 3. 상태 전파 - 통합된 방식
         if self.use_gastm and self.gastm_propagator:
@@ -103,6 +104,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
             if np.any(delta_v_p):
                 self.state[3:] += delta_v_p  # 순간 임펄스
             self._simulate_relative_motion()
+        self.state = np.asarray(self.state, dtype=np.float32)
     
         # 4. 시간 및 스텝 업데이트
         self.t += self.dt
@@ -124,9 +126,9 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         
         # 정보 딕셔너리 업데이트
         info.update({
-            "relative_distance_m": np.linalg.norm(self.state[:3]),
+            "relative_distance_m": float(np.linalg.norm(self.state[:3])),
             "evader_dv_magnitude": delta_v_e_mag,
-            "pursuer_dv_magnitude": np.linalg.norm(delta_v_p),
+            "pursuer_dv_magnitude": float(np.linalg.norm(delta_v_p)),
             "total_evader_delta_v": self.total_delta_v_e,
             "nash_metric": self.nash_metric,
             "dynamics_mode": "GA_STM" if self.use_gastm else "Nonlinear",
@@ -142,7 +144,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         info.setdefault('final_relative_distance', final_dist)
         info.setdefault('final_distance', final_dist)
     
-        return normalized_obs, evader_reward, terminated, truncated, info
+        return normalized_obs.astype(np.float32, copy=False), evader_reward, terminated, truncated, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 
                                   control_sequence: Optional[np.ndarray] = None) -> Dict:

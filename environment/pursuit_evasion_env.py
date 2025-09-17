@@ -96,7 +96,7 @@ class PursuitEvasionEnv(gym.Env):
         self.step_count = 0
         self.t = 0
         self.state = None
-        self.pursuer_last_action = np.zeros(3)
+        self.pursuer_last_action = np.zeros(3, dtype=np.float32)
         self.reward_history = []
 
         # Zero-Sum 게임 관련
@@ -255,7 +255,7 @@ class PursuitEvasionEnv(gym.Env):
 
         # 물리적 궤도 업데이트 추적
         self.evader_impulse_history = []
-        self.delta_v_e_sum = np.zeros(3)
+        self.delta_v_e_sum = np.zeros(3, dtype=np.float32)
         
         # 궤도 주기 추적
         self.orbit_time_tracker = 0
@@ -275,11 +275,12 @@ class PursuitEvasionEnv(gym.Env):
         norm_pos = np.clip(state[:3] / self.pos_scale, -1.0, 1.0)
         norm_vel = np.clip(state[3:6] / self.vel_scale, -1.0, 1.0)
         norm_action = np.clip(pursuer_action / self.delta_v_pmax, -1.0, 1.0)
-        return np.concatenate((norm_pos, norm_vel, norm_action))
+        return np.concatenate((norm_pos, norm_vel, norm_action)).astype(np.float32, copy=False)
 
     def _denormalize_action(self, normalized_action: np.ndarray) -> np.ndarray:
         """정규화된 액션을 실제 delta-v로 변환"""
-        return normalized_action * self.delta_v_emax
+        normalized_action = np.asarray(normalized_action, dtype=np.float32)
+        return normalized_action * np.float32(self.delta_v_emax)
 
     def initialize_with_accurate_dynamics(self) -> np.ndarray:
         """
@@ -322,7 +323,7 @@ class PursuitEvasionEnv(gym.Env):
             print(
                 f"WARNING: {max_sep/1000:.1f}km 이내 궤도 샘플링 실패, 기본값 사용"
             )
-            relative_state = np.array([2000.0, 1000.0, 500.0, 0.0, 0.0, 0.0])
+            relative_state = np.array([2000.0, 1000.0, 500.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
         # 기록용 속성 저장
         self.initial_evader_orbital_elements = dict(
@@ -333,7 +334,7 @@ class PursuitEvasionEnv(gym.Env):
         )
         self.initial_relative_distance = np.linalg.norm(relative_state[:3])
 
-        return relative_state
+        return np.asarray(relative_state, dtype=np.float32)
 
     def reset(
         self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
@@ -353,7 +354,7 @@ class PursuitEvasionEnv(gym.Env):
 
         # 상태 초기화
         self.state = self.initialize_with_accurate_dynamics()
-        self.pursuer_last_action = np.zeros(3)
+        self.pursuer_last_action = np.zeros(3, dtype=np.float32)
         self.step_count = 0
         self.t = 0
         self.total_delta_v_e = 0
@@ -365,7 +366,7 @@ class PursuitEvasionEnv(gym.Env):
 
         # 물리적 궤도 업데이트 추적 변수 초기화
         self.evader_impulse_history = []
-        self.delta_v_e_sum = np.zeros(3)
+        self.delta_v_e_sum = np.zeros(3, dtype=np.float32)
 
         # 버퍼 시간 관련 변수 초기화
         self.capture_state_duration = 0
@@ -389,7 +390,7 @@ class PursuitEvasionEnv(gym.Env):
         # 관측값 정규화
         normalized_obs = self._normalize_obs(observed_state, self.pursuer_last_action)
 
-        return normalized_obs, {}
+        return normalized_obs.astype(np.float32, copy=False), {}
 
     def observe(self, state: np.ndarray) -> np.ndarray:
         """센서 모델: 노이즈와 관측 제한이 있는 상태 반환"""
@@ -400,39 +401,42 @@ class PursuitEvasionEnv(gym.Env):
             # 센서 범위 내면 노이즈가 있는 측정값 반환
             observed_state = state + np.random.normal(0, self.sensor_noise_sigma, 6)
 
-        return observed_state
+        return np.asarray(observed_state, dtype=np.float32)
 
     def compute_interception_strategy(self, state: np.ndarray) -> np.ndarray:
         """
         Returns pursuer delta-v command [m/s] for this decision step.
         """
-        rho = state[:3].astype(float)
-        vrel = state[3:].astype(float)
+        state = np.asarray(state, dtype=np.float32)
+        rho = state[:3]
+        vrel = state[3:]
+        eps = np.float32(1e-12)
 
         # Candidate directions (unit)
         dirs = []
         # direct closing
-        if np.linalg.norm(rho) > 1e-12:
-            dirs.append(-rho / (np.linalg.norm(rho) + 1e-12))
+        if np.linalg.norm(rho) > eps:
+            dirs.append(-rho / (np.linalg.norm(rho) + eps))
         # relative velocity reverse
-        if np.linalg.norm(vrel) > 1e-12:
-            dirs.append(-vrel / (np.linalg.norm(vrel) + 1e-12))
+        if np.linalg.norm(vrel) > eps:
+            dirs.append(-vrel / (np.linalg.norm(vrel) + eps))
         # "HCW-like" heuristic dir (cross-track 과자극 제거: z=0)
-        hcw_dir = np.zeros(3, dtype=float)
-        if np.linalg.norm(rho[:2]) > 1e-12:
-            rt = rho[:2] / (np.linalg.norm(rho[:2]) + 1e-12)
-            rot = np.array([[np.sqrt(0.5), -np.sqrt(0.5)],
-                            [np.sqrt(0.5),  np.sqrt(0.5)]])
+        hcw_dir = np.zeros(3, dtype=np.float32)
+        if np.linalg.norm(rho[:2]) > eps:
+            rt = rho[:2] / (np.linalg.norm(rho[:2]) + eps)
+            root_half = np.float32(np.sqrt(0.5))
+            rot = np.array([[root_half, -root_half],
+                            [root_half,  root_half]], dtype=np.float32)
             hcw_inplane = rot @ (-rt)
             hcw_dir[:2] = hcw_inplane
-        dirs.append(hcw_dir / (np.linalg.norm(hcw_dir) + 1e-12))
+        dirs.append(hcw_dir / (np.linalg.norm(hcw_dir) + eps))
 
         # === (3) Look-ahead 평가 ===
         # GA-STM이면 Ak 기반 임펄스 look-ahead: x+=[0,0,0,Δv], x_next = Ak @ x+
         # 아니면 기존의 선형 예측 rho + (vrel + dv) * T
         best_cost = np.inf
-        best_action = np.zeros(3)
-        T = float(np.clip(np.linalg.norm(rho) / 1000.0, 1.0, 10.0)) * self.dt
+        best_action = np.zeros(3, dtype=np.float32)
+        T = np.float32(np.clip(np.linalg.norm(rho) / 1000.0, 1.0, 10.0) * self.dt)
 
         use_gastm = getattr(self, "use_gastm", False) and hasattr(self, "gastm_propagator")
         if use_gastm:
@@ -443,7 +447,7 @@ class PursuitEvasionEnv(gym.Env):
 
         for d in dirs:
             for s in [0.6, 0.8, 1.0]:
-                dv = s * self.delta_v_pmax * d
+                dv = np.float32(s) * np.float32(self.delta_v_pmax) * d.astype(np.float32, copy=False)
                 if use_gastm:
                     # Impulse at step start (standard order): x+ then one-step Ak
                     x_plus = state.copy()
@@ -460,35 +464,41 @@ class PursuitEvasionEnv(gym.Env):
 
         # === (2) 정렬(닫힘) 안전장치 + 노이즈 ===
         # 노이즈 추가 전에 먼저 best_action을 닫힘방향으로 보정
-        dv_cmd = best_action.copy()
+        dv_cmd = best_action.astype(np.float32, copy=True)
         if np.dot(dv_cmd, -rho) < 0:
             alpha = 0.5  # 닫힘 성분 최소 확보 비율
-            close_dir = -rho / (np.linalg.norm(rho) + 1e-12)
-            dv_cmd = (1 - alpha) * dv_cmd + alpha * self.delta_v_pmax * close_dir
+            close_dir = -rho / (np.linalg.norm(rho) + eps)
+            dv_cmd = (1 - alpha) * dv_cmd + alpha * np.float32(self.delta_v_pmax) * close_dir.astype(np.float32, copy=False)
         # 탐색 노이즈
-        noise_scale = float(np.clip(0.02 + 0.1 * (np.linalg.norm(rho) / max(self.capture_distance,1.0) - 1.0),
-                                    0.02, 0.15))
-        noise = np.random.normal(0.0, noise_scale * self.delta_v_pmax, 3)
+        noise_scale = np.float32(
+            np.clip(
+                0.02 + 0.1 * (np.linalg.norm(rho) / max(self.capture_distance, 1.0) - 1.0),
+                0.02,
+                0.15,
+            )
+        )
+        noise = np.random.normal(0.0, noise_scale * np.float32(self.delta_v_pmax), 3).astype(np.float32)
         dv_cmd = dv_cmd + noise
         # === (1) 벡터 노름 포화 ===
         norm = np.linalg.norm(dv_cmd)
         if norm > self.delta_v_pmax:
-            dv_cmd *= self.delta_v_pmax / (norm + 1e-12)
+            dv_cmd *= np.float32(self.delta_v_pmax / (norm + eps))
         # 정렬 안전장치 재확인(노이즈로 깨졌을 수 있음)
         if np.dot(dv_cmd, -rho) < 0:
             alpha = 0.20
-            close_dir = -rho / (np.linalg.norm(rho) + 1e-12)
-            dv_cmd = (1 - alpha) * dv_cmd + alpha * self.delta_v_pmax * close_dir
+            close_dir = -rho / (np.linalg.norm(rho) + eps)
+            dv_cmd = (1 - alpha) * dv_cmd + alpha * np.float32(self.delta_v_pmax) * close_dir.astype(np.float32, copy=False)
             n2 = np.linalg.norm(dv_cmd)
             if n2 > self.delta_v_pmax:
-                dv_cmd *= self.delta_v_pmax / (n2 + 1e-12)
-        return dv_cmd
+                dv_cmd *= np.float32(self.delta_v_pmax / (n2 + eps))
+        return dv_cmd.astype(np.float32, copy=False)
 
     def step(
         self, normalized_action_e: np.ndarray
     ) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """환경 스텝 실행 - 수정된 버전"""
         # 스텝 시작 시 현재 연료 사용량 저장 (delta-v 계산용)
+        normalized_action_e = np.asarray(normalized_action_e, dtype=np.float32)
         # 정규화된 액션을 실제 delta-v로 변환
         action_e = self._denormalize_action(normalized_action_e)
 
@@ -500,20 +510,21 @@ class PursuitEvasionEnv(gym.Env):
 
         # delta-v 적용
         delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
-        delta_v_e_mag = np.linalg.norm(delta_v_e)
+        delta_v_e_mag = float(np.linalg.norm(delta_v_e))
         self.total_delta_v_e += delta_v_e_mag
 
         # 추격자 행동 결정
         if self.step_count % self.k == 0:
             delta_v_p = self.compute_interception_strategy(self.state)
+            delta_v_p = np.asarray(delta_v_p, dtype=np.float32)
             self.pursuer_last_action = delta_v_p
             self.pursuer_action_history.append(delta_v_p.copy())
         else:
-            delta_v_p = np.zeros(3)
+            delta_v_p = np.zeros(3, dtype=np.float32)
 
         # 실제 이번 스텝의 delta-v 기록 (중요!)
         actual_evader_dv = delta_v_e_mag  # 실제 적용된 값
-        actual_pursuer_dv = np.linalg.norm(delta_v_p)  # 실제 적용된 값
+        actual_pursuer_dv = float(np.linalg.norm(delta_v_p))  # 실제 적용된 값
 
         # 궤도 업데이트 및 시뮬레이션 (기존 코드와 동일)
         if np.any(delta_v_e != 0):
@@ -523,6 +534,7 @@ class PursuitEvasionEnv(gym.Env):
             self.state[3:] += delta_v_p
 
         self._simulate_relative_motion()
+        self.state = np.asarray(self.state, dtype=np.float32)
     
         # 시간 및 스텝 업데이트
         self.t += self.dt
@@ -557,7 +569,7 @@ class PursuitEvasionEnv(gym.Env):
     
         # ========== 수정된 부분: 실제 delta-v 값 사용 ==========
         # 현재 상태 정보
-        current_relative_distance = np.linalg.norm(self.state[:3])
+        current_relative_distance = float(np.linalg.norm(self.state[:3]))
         
         # 기존 info 업데이트
         info.update({
@@ -616,7 +628,7 @@ class PursuitEvasionEnv(gym.Env):
                 }
             })
     
-        return normalized_obs, evader_reward, terminated, truncated, info
+        return normalized_obs.astype(np.float32, copy=False), evader_reward, terminated, truncated, info
 
     def _apply_evader_delta_v(self, delta_v_e: np.ndarray):
         """회피자 델타-V 적용 및 궤도 업데이트"""
