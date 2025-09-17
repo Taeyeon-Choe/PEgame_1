@@ -250,6 +250,19 @@ def interactive_mode():
             config.training.total_timesteps = timesteps
             config.environment.use_gastm = use_gastm
 
+            # dt 및 k 설정
+            dt_value = input(
+                f"시간 간격 dt (기본값: {config.environment.dt} s): "
+            ).strip()
+            if dt_value:
+                config.environment.dt = float(dt_value)
+
+            k_value = input(
+                f"행동 주기 k (기본값: {config.environment.k}): "
+            ).strip()
+            if k_value:
+                config.environment.k = int(k_value)
+
             if advanced:
                 # c 파라미터
                 c_value = input(f"c 파라미터 (기본값: {config.environment.c}): ").strip()
@@ -275,22 +288,14 @@ def interactive_mode():
                 if n_envs:
                     config.training.n_envs = int(n_envs)
 
-                # 궤도 주기 모드 사용 여부
-                orbit_cycles = input(
-                    "3궤도 주기 모드 사용? (y/n, 기본값: n): "
-                ).strip().lower()
-                if orbit_cycles:
-                    config.environment.use_orbit_cycles = orbit_cycles == 'y'
-                else:
-                    config.environment.use_orbit_cycles = False
-            
             print(f"\n학습 설정:")
             print(f"  - 타임스텝: {config.training.total_timesteps:,}")
             print(f"  - GA-STM 사용: {config.environment.use_gastm}")
+            print(f"  - dt: {config.environment.dt} s")
+            print(f"  - k: {config.environment.k}")
             print(f"  - c 파라미터: {config.environment.c}")
             print(f"  - 병렬 환경: {config.training.n_envs}")
-            print(f"  - 3궤도 주기 사용: {config.environment.use_orbit_cycles}")
-            
+
             confirm = input("\n이 설정으로 학습을 시작하시겠습니까? (y/n): ").strip().lower()
             if confirm == 'y':
                 train_standard_model(config)
@@ -314,6 +319,18 @@ def interactive_mode():
             config = get_config(experiment_name="interactive_evaluation")
             config.environment.use_gastm = use_gastm != 'n'
 
+            dt_value = input(
+                f"시간 간격 dt (기본값: {config.environment.dt} s): "
+            ).strip()
+            if dt_value:
+                config.environment.dt = float(dt_value)
+
+            k_value = input(
+                f"행동 주기 k (기본값: {config.environment.k}): "
+            ).strip()
+            if k_value:
+                config.environment.k = int(k_value)
+
             # Delta-V 설정 입력
             delta_v_emax = input(
                 f"회피자 최대 Delta-V (기본값: {config.environment.delta_v_emax} m/s): "
@@ -327,19 +344,12 @@ def interactive_mode():
             if delta_v_pmax:
                 config.environment.delta_v_pmax = float(delta_v_pmax)
 
-            orbit_cycles = input(
-                "3궤도 주기 모드 사용? (y/n, 기본값: n): "
-            ).strip().lower()
-            if orbit_cycles:
-                config.environment.use_orbit_cycles = orbit_cycles == 'y'
-            else:
-                config.environment.use_orbit_cycles = False
-
             print("\n평가 설정:")
             print(f"  GA-STM 사용: {config.environment.use_gastm}")
+            print(f"  dt: {config.environment.dt} s")
+            print(f"  k: {config.environment.k}")
             print(f"  회피자 최대 Delta-V: {config.environment.delta_v_emax} m/s")
             print(f"  추격자 최대 Delta-V: {config.environment.delta_v_pmax} m/s")
-            print(f"  3궤도 주기 사용: {config.environment.use_orbit_cycles}")
 
             evaluate_model(model_path, config, n_tests)
             
@@ -429,12 +439,7 @@ def main():
                        help='회피자 최대 Delta-V (m/s)')
     parser.add_argument('--delta-v-pmax', type=float, default=None,
                        help='추격자 최대 Delta-V (m/s)')
-    parser.add_argument('--use-orbit-cycles', dest='use_orbit_cycles', action='store_true',
-                       help='3궤도 주기 모드 사용 (기본값: 사용)')
-    parser.add_argument('--no-orbit-cycles', dest='use_orbit_cycles', action='store_false',
-                       help='3궤도 주기 모드 비활성화')
-    parser.set_defaults(use_orbit_cycles=None)
-    
+
     args = parser.parse_args()
     
     # 모드가 지정되지 않으면 대화형 모드
@@ -495,10 +500,6 @@ def main():
             custom_config['environment'] = custom_config.get('environment', {})
             custom_config['environment']['delta_v_pmax'] = args.delta_v_pmax
 
-        if args.use_orbit_cycles is not None:
-            custom_config['environment'] = custom_config.get('environment', {})
-            custom_config['environment']['use_orbit_cycles'] = args.use_orbit_cycles
-        
         config = get_config(
             experiment_name=args.experiment_name or f"{args.mode}_experiment",
             debug_mode=args.debug,
@@ -512,14 +513,15 @@ def main():
     print(f"GPU 사용: {config.training.use_gpu}")
     print(f"디버그 모드: {config.debug_mode}")
     print(f"GA-STM 사용: {config.environment.use_gastm}")
-    print(f"3궤도 주기 사용: {config.environment.use_orbit_cycles}")
-    
+
     if args.mode.startswith('train'):
         print(f"학습 스텝: {config.training.total_timesteps:,}")
         print(f"병렬 환경 수: {config.training.n_envs}")
         print(f"저장 주기: {config.training.save_freq}")
         
     print(f"\n환경 설정:")
+    print(f"  dt: {config.environment.dt} s")
+    print(f"  k: {config.environment.k}")
     print(f"  c 파라미터: {config.environment.c}")
     print(f"  최대 스텝: {config.environment.max_steps}")
     print(f"  최대 Delta-V 예산: {config.environment.max_delta_v_budget} m/s")

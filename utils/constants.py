@@ -46,8 +46,6 @@ ENV_PARAMS = {
     "max_initial_separation": 3e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
     "use_gastm": True,
-    # 궤도 모드 주기 사용 여부 (True: 3궤도 주기, False: 전체 max_steps 사용)
-    "use_orbit_cycles": False,
 }
 
 # 버퍼 시간 설정
