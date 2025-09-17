@@ -1233,7 +1233,33 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
     
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     fig.suptitle('Training and Testing Summary Dashboard', fontsize=16)
-    
+
+    def _safe_hist(ax, data, bins=10, color='blue', **kwargs):
+        """작은 표본/제로 분산 데이터를 위해 안전하게 히스토그램을 그린다."""
+        data = np.asarray(data, dtype=float)
+        if data.size == 0:
+            ax.text(0.5, 0.5, '데이터 없음', ha='center', va='center')
+            return
+
+        finite_data = data[np.isfinite(data)]
+        if finite_data.size == 0:
+            ax.text(0.5, 0.5, '유효 데이터 없음', ha='center', va='center')
+            return
+
+        data = finite_data
+        value_range = np.max(data) - np.min(data)
+        # 표본 개수보다 많은 bin은 불필요하므로 제한
+        max_bins = max(1, min(bins, data.size))
+
+        if value_range <= 0:
+            # 단일 값만 있을 때는 수동 범위를 지정해 0 폭 문제 방지
+            center = data[0]
+            span = max(1e-3, abs(center) * 0.1)
+            hist_range = (center - span, center + span)
+            ax.hist(data, bins=1, range=hist_range, color=color, **kwargs)
+        else:
+            ax.hist(data, bins=max_bins, color=color, **kwargs)
+
     # 1. 성공률 추이
     if 'success_rates' in training_stats and training_stats['success_rates']:
         axes[0, 0].plot(training_stats['success_rates'], 'b-', linewidth=2)
@@ -1244,8 +1270,10 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
         axes[0, 0].set_ylim(0, 1)
     
     # 2. 테스트 결과 분포
+    success_count = 0
+    failure_count = 0
     if test_results:
-        success_count = sum(1 for r in test_results if r['success'])
+        success_count = sum(1 for r in test_results if r.get('success'))
         failure_count = len(test_results) - success_count
         axes[0, 1].pie([success_count, failure_count], labels=['Success', 'Failure'], 
                        autopct='%1.1f%%', colors=['green', 'red'], startangle=90)
@@ -1261,18 +1289,20 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
         axes[0, 2].set_ylim(0, 1)
     
     # 4. Delta-V 사용량 분포
+    delta_vs = []
     if test_results:
         delta_vs = [r['evader_total_delta_v_ms'] for r in test_results]
-        axes[1, 0].hist(delta_vs, bins=10, alpha=0.7, color='blue', edgecolor='black')
+        _safe_hist(axes[1, 0], delta_vs, bins=10, color='blue', alpha=0.7, edgecolor='black')
         axes[1, 0].set_title('Delta-V Usage Distribution')
         axes[1, 0].set_xlabel('Delta-V (m/s)')
         axes[1, 0].set_ylabel('Frequency')
         axes[1, 0].grid(True, alpha=0.3)
-    
+
     # 5. 최종 거리 분포
+    distances = []
     if test_results:
         distances = [r['final_distance_m'] for r in test_results]
-        axes[1, 1].hist(distances, bins=10, alpha=0.7, color='green', edgecolor='black')
+        _safe_hist(axes[1, 1], distances, bins=10, color='green', alpha=0.7, edgecolor='black')
         axes[1, 1].axvline(x=1000, color='r', linestyle='--', label='Capture Threshold')
         axes[1, 1].set_title('Final Distance Distribution')
         axes[1, 1].set_xlabel('Distance (m)')
@@ -1282,13 +1312,28 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
     
     # 6. 성능 요약 텍스트
     axes[1, 2].axis('off')
-    summary_text = f"""
-    Training Episodes: {training_stats.get('episodes_completed', 'N/A')}
-    Test Success Rate: {success_count/len(test_results):.1%} if test_results else 'N/A'
-    Avg Delta-V: {np.mean(delta_vs):.1f} m/s if test_results else 'N/A'
-    Avg Distance: {np.mean(distances):.0f} m if test_results else 'N/A'
-    Nash Metric: {training_stats.get('nash_metrics', [0])[-1] if 'nash_metrics' in training_stats and training_stats['nash_metrics'] else 0:.3f}
-    """
+    success_rate = success_count / len(test_results) if test_results else 0
+    avg_delta_v = np.mean(delta_vs) if delta_vs else 0
+    avg_distance = np.mean(distances) if distances else 0
+    nash_metric = (
+        training_stats.get('nash_metrics', [0])[-1]
+        if 'nash_metrics' in training_stats and training_stats['nash_metrics']
+        else 0
+    )
+
+    summary_text = (
+        "Training Episodes: {episodes}\n"
+        "Test Success Rate: {success_rate}\n"
+        "Avg Delta-V: {avg_delta_v}\n"
+        "Avg Distance: {avg_distance}\n"
+        "Nash Metric: {nash_metric:.3f}"
+    ).format(
+        episodes=training_stats.get('episodes_completed', 'N/A'),
+        success_rate=f"{success_rate:.1%}" if test_results else 'N/A',
+        avg_delta_v=f"{avg_delta_v:.1f} m/s" if delta_vs else 'N/A',
+        avg_distance=f"{avg_distance:.0f} m" if distances else 'N/A',
+        nash_metric=nash_metric,
+    )
     axes[1, 2].text(0.1, 0.5, summary_text, fontsize=12, verticalalignment='center')
     axes[1, 2].set_title('Performance Summary')
     
