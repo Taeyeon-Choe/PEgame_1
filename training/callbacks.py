@@ -679,12 +679,30 @@ class EphemerisLoggerCallback(BaseCallback):
                  evader=final_episode['evader'],
                  pursuer=final_episode['pursuer'],
                  outcome=final_episode['outcome'])
-        
+
         if self.verbose > 0:
             print(f"최종 에피소드 ECI 데이터 저장: {path}")
             print(f"  - 시뮬레이션 시간: {final_episode['t'][-1]/60:.1f} 분")
             print(f"  - 데이터 포인트: {len(final_episode['t'])}")
             print(f"  - 결과: {final_episode['outcome']}")
+
+        # MATLAB 호환을 위한 MAT 파일 저장 시도
+        try:
+            from scipy.io import savemat
+
+            matlab_path = os.path.join(self.log_dir, 'final_episode_ephemeris.mat')
+            savemat(matlab_path, {
+                't': final_episode['t'],
+                'evader': final_episode['evader'],
+                'pursuer': final_episode['pursuer'],
+                'outcome': final_episode['outcome'],
+            })
+
+            if self.verbose > 0:
+                print(f"MATLAB 호환 데이터 저장: {matlab_path}")
+        except Exception as exc:
+            if self.verbose > 0:
+                print(f"MAT 파일 저장 실패: {exc}")
         
         # 시각화
         plot_eci_trajectories(
@@ -752,9 +770,14 @@ class DetailedAnalysisCallback(BaseCallback):
         if env_idx not in self.env_data:
             self.env_data[env_idx] = {
                 'current_steps': [],
+                'current_times': [],
                 'current_distances': [],
                 'current_evader_dv': [],
                 'current_pursuer_dv': [],
+                'current_evader_dv_vec': [],
+                'current_pursuer_dv_vec': [],
+                'current_positions': [],
+                'current_velocities': [],
                 'episode_count': 0,
                 'episode_start_step': 0
             }
@@ -790,11 +813,55 @@ class DetailedAnalysisCallback(BaseCallback):
             env_data = self.env_data[env_idx]
             current_step = len(env_data['current_steps'])
             env_data['current_steps'].append(current_step)
+            env_data['current_times'].append(float(info.get('simulation_time_s', current_step)))
             env_data['current_distances'].append(relative_distance)
             
             # 게임 모드일 때만 delta-v 기록 (또는 모든 스텝 기록)
             env_data['current_evader_dv'].append(evader_dv_mag)
             env_data['current_pursuer_dv'].append(pursuer_dv_mag)
+
+            evader_vec = info.get('evader_delta_v_vector')
+            pursuer_vec = info.get('pursuer_delta_v_vector')
+
+            if evader_vec is not None:
+                evader_vec = np.asarray(evader_vec, dtype=np.float32).flatten()
+            if pursuer_vec is not None:
+                pursuer_vec = np.asarray(pursuer_vec, dtype=np.float32).flatten()
+
+            env_data['current_evader_dv_vec'].append(
+                evader_vec[:3].astype(np.float64).tolist() if isinstance(evader_vec, np.ndarray) and evader_vec.size >= 3
+                else [0.0, 0.0, 0.0]
+            )
+            env_data['current_pursuer_dv_vec'].append(
+                pursuer_vec[:3].astype(np.float64).tolist() if isinstance(pursuer_vec, np.ndarray) and pursuer_vec.size >= 3
+                else [0.0, 0.0, 0.0]
+            )
+            
+            # 상대 위치/속도 기록 (있다면)
+            rel_state = info.get('relative_state')
+            if rel_state is not None:
+                rel_state = np.asarray(rel_state, dtype=np.float32).flatten()
+            else:
+                rel_state = None
+
+            if rel_state is not None and rel_state.size >= 6:
+                env_data['current_positions'].append(rel_state[:3].astype(np.float64).tolist())
+                env_data['current_velocities'].append(rel_state[3:6].astype(np.float64).tolist())
+            else:
+                rel_pos = info.get('relative_position_m')
+                rel_vel = info.get('relative_velocity_mps')
+                if rel_pos is not None:
+                    rel_pos = np.asarray(rel_pos, dtype=np.float32).flatten()
+                if rel_vel is not None:
+                    rel_vel = np.asarray(rel_vel, dtype=np.float32).flatten()
+                env_data['current_positions'].append(
+                    rel_pos[:3].astype(np.float64).tolist() if isinstance(rel_pos, np.ndarray) and rel_pos.size >= 3
+                    else [float('nan')]*3
+                )
+                env_data['current_velocities'].append(
+                    rel_vel[:3].astype(np.float64).tolist() if isinstance(rel_vel, np.ndarray) and rel_vel.size >= 3
+                    else [float('nan')]*3
+                )
             
             # 모드 정보도 추가로 기록
             if 'orbit_modes' not in env_data:
@@ -826,6 +893,7 @@ class DetailedAnalysisCallback(BaseCallback):
                     'start_step': env_data['episode_start_step'],
                     'end_step': self.n_calls,
                     'steps': env_data['current_steps'].copy(),
+                    'times': env_data['current_times'].copy(),
                     'outcome': info['outcome'],
                     'final_distance': relative_distance,
                     'total_evader_dv': total_evader_dv,  # 게임 모드에서의 총 delta-v
@@ -833,7 +901,11 @@ class DetailedAnalysisCallback(BaseCallback):
                     'distances': env_data['current_distances'].copy(),
                     'evader_dvs': env_data['current_evader_dv'].copy(),
                     'pursuer_dvs': env_data['current_pursuer_dv'].copy(),
+                    'evader_dv_vectors': [vec[:] for vec in env_data['current_evader_dv_vec']],
+                    'pursuer_dv_vectors': [vec[:] for vec in env_data['current_pursuer_dv_vec']],
                     'orbit_modes': env_data['orbit_modes'].copy(),  # 모드 정보 추가
+                    'positions': [pos[:] for pos in env_data['current_positions']],
+                    'velocities': [vel[:] for vel in env_data['current_velocities']],
                     'game_mode_steps': len(game_mode_indices),  # 게임 모드 스텝 수
                     'total_steps': len(env_data['current_steps'])  # 전체 스텝 수
                 }
@@ -846,9 +918,14 @@ class DetailedAnalysisCallback(BaseCallback):
                 
                 # 현재 환경의 데이터 초기화
                 env_data['current_steps'] = []
+                env_data['current_times'] = []
                 env_data['current_distances'] = []
                 env_data['current_evader_dv'] = []
                 env_data['current_pursuer_dv'] = []
+                env_data['current_evader_dv_vec'] = []
+                env_data['current_pursuer_dv_vec'] = []
+                env_data['current_positions'] = []
+                env_data['current_velocities'] = []
                 env_data['orbit_modes'] = []
                 env_data['episode_start_step'] = self.n_calls
         
@@ -1231,3 +1308,32 @@ class DetailedAnalysisCallback(BaseCallback):
         
         if self.verbose:
             print(f"\n분석 데이터 저장 완료: {self.save_dir}/analysis_data.pkl")
+
+        # JSON 포맷으로도 저장 (MATLAB 등 타 도구 호환)
+        json_path = f'{self.save_dir}/analysis_data.json'
+
+        def _to_serializable(obj):
+            if isinstance(obj, (np.floating, float)):
+                if np.isnan(obj):
+                    return None
+                return float(obj)
+            if isinstance(obj, (np.integer, int)):
+                return int(obj)
+            if isinstance(obj, (np.ndarray,)):
+                return _to_serializable(obj.tolist())
+            if isinstance(obj, np.number):
+                return _to_serializable(obj.item())
+            if isinstance(obj, (list, tuple)):
+                return [_to_serializable(item) for item in obj]
+            if isinstance(obj, dict):
+                return {key: _to_serializable(val) for key, val in obj.items()}
+            return obj
+
+        try:
+            with open(json_path, 'w') as f:
+                json.dump(_to_serializable(data), f, indent=2)
+            if self.verbose:
+                print(f"JSON 데이터 저장 완료: {json_path}")
+        except Exception as exc:
+            if self.verbose:
+                print(f"JSON 저장 실패: {exc}")

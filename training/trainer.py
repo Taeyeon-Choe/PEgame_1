@@ -20,6 +20,7 @@ from training.callbacks import (
     PerformanceCallback,
     EarlyStoppingCallback,
     EphemerisLoggerCallback,
+    DetailedAnalysisCallback,
 )
 from utils.system_info import patch_sb3_system_info
 
@@ -174,7 +175,16 @@ class SACTrainer:
         ephemeris_callback = EphemerisLoggerCallback(log_dir=self.log_dir)
         self.callbacks.append(ephemeris_callback)
 
-        # 4. 평가 콜백 (best 모델 저장)
+        # 4. 상세 분석 자동화 (MATLAB 등 후처리용 데이터 포함)
+        detailed_callback = DetailedAnalysisCallback(
+            plot_freq=5000,
+            episode_plot_freq=200,
+            save_dir=f"{self.log_dir}/analysis",
+            verbose=1,
+        )
+        self.callbacks.append(detailed_callback)
+
+        # 5. 평가 콜백 (best 모델 저장)
         eval_env = self._make_eval_env()
         eval_freq = max(1, getattr(self.training_config, "save_freq", 10000))
         eval_callback = EvalCallback(
@@ -190,7 +200,7 @@ class SACTrainer:
         self.callbacks.append(eval_callback)
         self._eval_env_ref = eval_env
 
-        # 5. 조기 종료 (선택적)
+        # 6. 조기 종료 (선택적)
         if hasattr(self.training_config, "early_stopping") and self.training_config.early_stopping:
             early_stopping_callback = EarlyStoppingCallback(
                 target_success_rate=0.8, 

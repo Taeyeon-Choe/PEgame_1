@@ -577,11 +577,18 @@ class PursuitEvasionEnv(gym.Env):
             "relative_distance_m": current_relative_distance,
             "evader_dv_magnitude": actual_evader_dv,  # 수정: 실제 값 사용
             "pursuer_dv_magnitude": actual_pursuer_dv,  # 수정: 실제 값 사용
+            "relative_state": self.state.copy(),
+            "relative_position_m": self.state[:3].copy(),
+            "relative_velocity_mps": self.state[3:].copy(),
+            "evader_delta_v_vector": delta_v_e.astype(np.float32).copy().tolist(),
+            "pursuer_delta_v_vector": delta_v_p.astype(np.float32).copy().tolist(),
 
             # 추가 유용한 정보
             "total_evader_delta_v": self.total_delta_v_e,
             "remaining_fuel": self.max_delta_v_budget - self.total_delta_v_e,
             "fuel_fraction_used": self.total_delta_v_e / self.max_delta_v_budget,
+            "simulation_time_s": float(self.t),
+            "time_step_index": int(self.step_count),
 
             # 기존 정보들도 유지
             "nash_metric": self.nash_metric,
