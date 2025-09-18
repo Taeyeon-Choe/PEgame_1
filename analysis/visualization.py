@@ -983,7 +983,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
                 colorbar=dict(title="Time (min)", x=1.05),
                 cmin=time_values_min.min(),
                 cmax=time_values_min.max(),
-                symbol="circle"  # 명시적으로 원 모양 지정
+                symbol="triangle"  # 삼각형 모양 지정
             ),
             name="Pursuer",
             customdata=np.column_stack((pursuer_states_km[:, 0], pursuer_states_km[:, 1], pursuer_states_km[:, 2], time_values_sec)),
@@ -1005,7 +1005,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=[evader_states_km[0, 2]],
             mode="markers",
             marker=dict(
-                size=12,  # 크기 증가
+                size=6,  # 크기
                 color="darkblue",  # 진한 파란색
                 symbol="square",
                 line=dict(color="white", width=2)  # 흰색 테두리 추가
@@ -1029,7 +1029,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=[evader_states_km[-1, 2]],
             mode="markers",
             marker=dict(
-                size=12,  # 크기 증가
+                size=6,  # 크기
                 color="lightblue",  # 연한 파란색
                 symbol="x",
                 line=dict(color="darkblue", width=2)  # 진한 파란색 테두리
@@ -1053,7 +1053,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=[pursuer_states_km[0, 2]],
             mode="markers",
             marker=dict(
-                size=12,  # 크기 증가
+                size=6,  # 크기
                 color="darkred",  # 진한 빨간색
                 symbol="diamond",
                 line=dict(color="white", width=2)  # 흰색 테두리 추가
@@ -1077,7 +1077,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
             z=[pursuer_states_km[-1, 2]],
             mode="markers",
             marker=dict(
-                size=12,  # 크기 증가
+                size=6,  # 크기
                 color="lightcoral",  # 연한 빨간색
                 symbol="cross",  # 'star' 대신 'cross' 사용
                 line=dict(color="darkred", width=2)  # 진한 빨간색 테두리
