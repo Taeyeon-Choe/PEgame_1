@@ -1259,7 +1259,8 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.subplot(3, 2, 5)
         success_rates = []
         avg_dvs = []
-        
+        scatter_env_ids = []
+
         for env_id in env_ids:
             env_episodes = [ep for ep in self.all_episodes_data if ep['env_id'] == env_id]
             if env_episodes:
@@ -1267,13 +1268,17 @@ class DetailedAnalysisCallback(BaseCallback):
                 success_rate = successes / len(env_episodes) if env_episodes else 0
                 success_rates.append(success_rate)
                 avg_dvs.append(avg_evader_dv.get(env_id, 0))
-        
-        if success_rates and avg_dvs:
-            scatter = plt.scatter(avg_dvs, success_rates, c=env_ids, cmap='viridis', s=100)
+                scatter_env_ids.append(env_id)
+
+        if scatter_env_ids:
+            color_values = np.array(scatter_env_ids, dtype=float)
+            scatter = plt.scatter(avg_dvs, success_rates, c=color_values, cmap='viridis', s=100)
             plt.xlabel('Average Evader Delta-V (m/s)')
             plt.ylabel('Success Rate')
             plt.title('Fuel Efficiency vs Success Rate')
-            plt.colorbar(scatter, label='Environment ID')
+            cbar = plt.colorbar(scatter, label='Environment ID')
+            cbar.set_ticks(color_values)
+            cbar.set_ticklabels([str(env_id) for env_id in scatter_env_ids])
             plt.grid(True, alpha=0.3)
         
         # 6. 요약 통계
