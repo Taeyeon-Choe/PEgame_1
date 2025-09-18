@@ -17,6 +17,30 @@ from utils.constants import ANALYSIS_PARAMS
 from analysis.visualization import plot_training_progress, plot_delta_v_per_episode
 
 
+def _json_ready(value):
+    """Convert numpy / float32 values to JSON-safe Python types."""
+
+    if isinstance(value, (np.floating, float)):
+        result = float(value)
+        if np.isnan(result):
+            return None
+        return result
+
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+
+    if isinstance(value, np.ndarray):
+        return [_json_ready(item) for item in value.tolist()]
+
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+
+    if isinstance(value, dict):
+        return {key: _json_ready(val) for key, val in value.items()}
+
+    return value
+
+
 class EvasionTrackingCallback(BaseCallback):
     """회피 결과 추적 콜백 (벡터 환경 완전 지원)"""
     
@@ -296,7 +320,7 @@ class EvasionTrackingCallback(BaseCallback):
                 evader_rewards=self.evader_rewards,
                 pursuer_rewards=self.pursuer_rewards,
                 nash_metrics=self.nash_equilibrium_metrics,
-                buffer_times=self.buffer_time_stats,
+                buffer_times=[_json_ready(bt) for bt in self.buffer_time_stats],
                 episode_count=self.episode_count,
                 save_dir=self.log_dir
             )
@@ -305,7 +329,7 @@ class EvasionTrackingCallback(BaseCallback):
                 print(f"플롯 생성 중 오류: {e}")
 
         try:
-            plot_delta_v_per_episode(self.evader_delta_vs, self.log_dir)
+            plot_delta_v_per_episode([float(x) for x in self.evader_delta_vs], self.log_dir)
         except Exception as e:
             if self.verbose > 0:
                 print(f"Delta-V 플롯 생성 중 오류: {e}")
@@ -339,7 +363,7 @@ class EvasionTrackingCallback(BaseCallback):
         
         stats_path = os.path.join(self.log_dir, "evasion_stats.json")
         with open(stats_path, 'w') as f:
-            json.dump(stats, f, indent=2)
+            json.dump(_json_ready(stats), f, indent=2)
         
         if self.verbose > 0:
             print(f"학습 통계 저장: {stats_path}")
@@ -1312,26 +1336,9 @@ class DetailedAnalysisCallback(BaseCallback):
         # JSON 포맷으로도 저장 (MATLAB 등 타 도구 호환)
         json_path = f'{self.save_dir}/analysis_data.json'
 
-        def _to_serializable(obj):
-            if isinstance(obj, (np.floating, float)):
-                if np.isnan(obj):
-                    return None
-                return float(obj)
-            if isinstance(obj, (np.integer, int)):
-                return int(obj)
-            if isinstance(obj, (np.ndarray,)):
-                return _to_serializable(obj.tolist())
-            if isinstance(obj, np.number):
-                return _to_serializable(obj.item())
-            if isinstance(obj, (list, tuple)):
-                return [_to_serializable(item) for item in obj]
-            if isinstance(obj, dict):
-                return {key: _to_serializable(val) for key, val in obj.items()}
-            return obj
-
         try:
             with open(json_path, 'w') as f:
-                json.dump(_to_serializable(data), f, indent=2)
+                json.dump(_json_ready(data), f, indent=2)
             if self.verbose:
                 print(f"JSON 데이터 저장 완료: {json_path}")
         except Exception as exc:

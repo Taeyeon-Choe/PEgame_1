@@ -16,6 +16,27 @@ import csv
 from utils.constants import PLOT_PARAMS, SAFETY_THRESHOLDS, R_EARTH
 from scipy.io import savemat
 
+def _json_ready(value):
+    if isinstance(value, (np.floating, float)):
+        result = float(value)
+        if np.isnan(result):
+            return None
+        return result
+
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+
+    if isinstance(value, np.ndarray):
+        return [_json_ready(item) for item in value.tolist()]
+
+    if isinstance(value, (list, tuple)):
+        return [_json_ready(item) for item in value]
+
+    if isinstance(value, dict):
+        return {key: _json_ready(val) for key, val in value.items()}
+
+    return value
+
 def setup_matplotlib():
     """Matplotlib 설정"""
     plt.style.use('default')
@@ -119,7 +140,7 @@ def plot_training_progress(success_rates: List[float],
             # 결과 분포 데이터 저장
             outcome_data = {label: count for label, count in zip(filtered_labels, filtered_counts)}
             with open(f'{save_dir}/outcome_distribution.json', 'w') as f:
-                json.dump(outcome_data, f, indent=2)
+                json.dump(_json_ready(outcome_data), f, indent=2)
     
     # 3. Zero-Sum 게임 보상 그래프
     if len(evader_rewards) > 100:
@@ -221,7 +242,7 @@ def plot_training_progress(success_rates: List[float],
     }
     
     with open(f'{save_dir}/training_progress.json', 'w') as f:
-        json.dump(all_training_data, f, indent=2)
+        json.dump(_json_ready(all_training_data), f, indent=2)
 
 
 def plot_delta_v_per_episode(delta_v_values: List[float], save_dir: str, window: int = 50):
@@ -445,7 +466,7 @@ def visualize_trajectory(states: np.ndarray,
             'vz': states[:, 5].tolist() if states.shape[1] > 5 else [],
         }
         with open(f"{save_path}_trajectory_data.json", 'w') as f:
-            json.dump(trajectory_data, f, indent=2)
+            json.dump(_json_ready(trajectory_data), f, indent=2)
         # MATLAB 호환 형식 저장
         mat_data = {
             'x': states[:, 0],
@@ -579,7 +600,7 @@ def plot_outcome_distribution(outcome_types: Dict, save_dir: Optional[str] = Non
             # 분포 데이터 저장
             outcome_data = {label: count for label, count in zip(filtered_labels, filtered_counts)}
             with open(f"{save_dir}/outcome_distribution.json", 'w') as f:
-                json.dump(outcome_data, f, indent=2)
+                json.dump(_json_ready(outcome_data), f, indent=2)
         plt.close()
 
 
@@ -758,7 +779,7 @@ def plot_eci_trajectories(
         # JSON 파일 저장 (리스트 변환)
         json_data = {k: v.tolist() for k, v in ephemeris_data.items()}
         with open(f"{save_path}_eci.json", 'w') as f:
-            json.dump(json_data, f, indent=2)
+            json.dump(_json_ready(json_data), f, indent=2)
 
     if use_plotly:
         if animate:
@@ -1407,7 +1428,7 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
     
     try:
         with open(f"{save_dir}/dashboard_summary.json", 'w') as f:
-            json.dump(dashboard_data, f, indent=2)
+            json.dump(_json_ready(dashboard_data), f, indent=2)
     except TypeError as e:
         print(f"JSON 저장 오류: {e}")
         # 문제가 있는 데이터 타입 출력
