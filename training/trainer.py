@@ -7,8 +7,10 @@ import datetime
 import torch
 import numpy as np
 from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import CheckpointCallback, CallbackList, EvalCallback
+from stable_baselines3.common.callbacks import CallbackList, EvalCallback
+from stable_baselines3.common.vec_env import DummyVecEnv
 from environment.pursuit_evasion_env import PursuitEvasionEnv
+from environment.pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
 from stable_baselines3.common.logger import configure
 from typing import Optional, List, Dict, Any
 
@@ -16,7 +18,6 @@ from config.settings import ProjectConfig
 from training.callbacks import (
     EvasionTrackingCallback,
     PerformanceCallback,
-    ModelSaveCallback,
     EarlyStoppingCallback,
     EphemerisLoggerCallback,
 )
@@ -53,6 +54,7 @@ class SACTrainer:
         self.model = None
         self.logger = None
         self.callbacks = []
+        self._eval_env_ref = None
 
         # 학습 기록
         self.training_history = {}
@@ -82,6 +84,16 @@ class SACTrainer:
         
         print(f"로그 디렉토리 생성 완료: {log_dir}")
         return log_dir
+
+    def _make_eval_env(self) -> DummyVecEnv:
+        """평가용 DummyVecEnv 생성"""
+
+        def _init_env():
+            if getattr(self.config.environment, "use_gastm", False):
+                return PursuitEvasionEnvGASTM(self.config)
+            return PursuitEvasionEnv(self.config)
+
+        return DummyVecEnv([_init_env])
 
     def setup_model(self, model_params: Optional[Dict[str, Any]] = None, policy_kwargs=None):
         """SAC 모델 설정"""
@@ -162,47 +174,23 @@ class SACTrainer:
         ephemeris_callback = EphemerisLoggerCallback(log_dir=self.log_dir)
         self.callbacks.append(ephemeris_callback)
 
-        # 4. 모델 체크포인트 저장
-        checkpoint_callback = CheckpointCallback(
-            save_freq=self.training_config.save_freq,
-            save_path=f"{self.log_dir}/models",
-            name_prefix="sac_checkpoint",
-            save_replay_buffer=True,
-            save_vecnormalize=True,
-            verbose=1
-        )
-        self.callbacks.append(checkpoint_callback)
-
-        # 5. 평가 콜백 (선택적)
-        if hasattr(self.env, 'envs'):
-            # 벡터화된 환경인 경우
-            eval_env = self.env.envs[0] if hasattr(self.env.envs[0], 'reset') else None
-        else:
-            eval_env = self.env
-            
-        if eval_env:
-            eval_callback = EvalCallback(
-                eval_env,
-                best_model_save_path=f"{self.log_dir}/models",
-                log_path=f"{self.log_dir}/eval",
-                eval_freq=10000,
-                n_eval_episodes=5,
-                deterministic=True,
-                render=False,
-                verbose=1
-            )
-            self.callbacks.append(eval_callback)
-
-        # 5. 추가 모델 저장
-        model_save_callback = ModelSaveCallback(
-            save_freq=self.training_config.save_freq * 2,
-            save_path=f"{self.log_dir}/models",
-            name_prefix="sac_model",
+        # 4. 평가 콜백 (best 모델 저장)
+        eval_env = self._make_eval_env()
+        eval_freq = max(1, getattr(self.training_config, "save_freq", 10000))
+        eval_callback = EvalCallback(
+            eval_env,
+            best_model_save_path=f"{self.log_dir}/models",
+            log_path=f"{self.log_dir}/eval",
+            eval_freq=eval_freq,
+            n_eval_episodes=5,
+            deterministic=True,
+            render=False,
             verbose=1,
         )
-        self.callbacks.append(model_save_callback)
+        self.callbacks.append(eval_callback)
+        self._eval_env_ref = eval_env
 
-        # 6. 조기 종료 (선택적)
+        # 5. 조기 종료 (선택적)
         if hasattr(self.training_config, "early_stopping") and self.training_config.early_stopping:
             early_stopping_callback = EarlyStoppingCallback(
                 target_success_rate=0.8, 
@@ -258,6 +246,13 @@ class SACTrainer:
             reset_num_timesteps=reset_num_timesteps,
             progress_bar=True  # 진행 표시줄 활성화
         )
+
+        # 평가용 환경 정리
+        if self._eval_env_ref is not None:
+            try:
+                self._eval_env_ref.close()
+            finally:
+                self._eval_env_ref = None
 
         print(f"\n{'='*50}")
         print(f"학습 완료!")

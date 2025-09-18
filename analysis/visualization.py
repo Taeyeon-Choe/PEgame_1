@@ -224,6 +224,45 @@ def plot_training_progress(success_rates: List[float],
         json.dump(all_training_data, f, indent=2)
 
 
+def plot_delta_v_per_episode(delta_v_values: List[float], save_dir: str, window: int = 50):
+    """에피소드별 회피자 Delta-V 사용량을 선 그래프로 저장"""
+    if not delta_v_values:
+        return
+
+    setup_matplotlib()
+    os.makedirs(save_dir, exist_ok=True)
+
+    episodes = np.arange(1, len(delta_v_values) + 1)
+
+    plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+    plt.plot(episodes, delta_v_values, label='Per-Episode ΔV', color='tab:green', linewidth=1.2)
+
+    if len(delta_v_values) >= window:
+        kernel = np.ones(window, dtype=np.float64) / window
+        rolling = np.convolve(delta_v_values, kernel, mode='valid')
+        plt.plot(episodes[window - 1:], rolling, label=f'{window}-Episode Moving Avg', color='tab:blue', linewidth=2)
+
+    plt.xlabel('Episode')
+    plt.ylabel('Total ΔV (m/s)')
+    plt.title('Evader Delta-V Usage per Episode')
+    plt.grid(True, alpha=0.3)
+    plt.legend(loc='best')
+    plt.tight_layout()
+
+    latest_path = os.path.join(save_dir, 'evader_delta_v_trend.png')
+    plt.savefig(latest_path, dpi=PLOT_PARAMS['dpi'])
+
+    snapshot_path = os.path.join(save_dir, f'evader_delta_v_ep{len(delta_v_values)}.png')
+    plt.savefig(snapshot_path, dpi=PLOT_PARAMS['dpi'])
+    plt.close()
+
+    data = {
+        'episode': episodes.tolist(),
+        'delta_v': delta_v_values,
+    }
+    save_data_to_csv(data, os.path.join(save_dir, 'evader_delta_v.csv'))
+
+
 def plot_delta_v_components(
     actions_e: np.ndarray, actions_p: np.ndarray, save_path: str
 ) -> None:

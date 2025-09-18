@@ -8,13 +8,13 @@ import datetime
 import os
 import copy
 import json
-from collections import deque
+from collections import deque, Counter
 from stable_baselines3.common.callbacks import BaseCallback
 import torch
 from orbital_mechanics.coordinate_transforms import lvlh_to_eci
 from analysis.visualization import plot_eci_trajectories
 from utils.constants import ANALYSIS_PARAMS
-from analysis.visualization import plot_training_progress
+from analysis.visualization import plot_training_progress, plot_delta_v_per_episode
 
 
 class EvasionTrackingCallback(BaseCallback):
@@ -40,6 +40,8 @@ class EvasionTrackingCallback(BaseCallback):
         self.conditional_evasions = 0
         self.temporary_evasions = 0
         self.buffer_time_stats = []
+        self.evader_delta_vs = []
+        self.delta_v_window = deque(maxlen=window_size)
         
         # Zero-Sum 게임 메트릭
         self.evader_rewards = []
@@ -101,6 +103,12 @@ class EvasionTrackingCallback(BaseCallback):
         # 성공 여부 판단
         success = outcome in ['permanent_evasion', 'conditional_evasion', 'temporary_evasion', 'max_steps_reached']
         self.success_window.append(1 if success else 0)
+
+        total_evader_dv = self._extract_total_delta_v(info, termination_details)
+        if total_evader_dv is None:
+            total_evader_dv = 0.0
+        self.evader_delta_vs.append(total_evader_dv)
+        self.delta_v_window.append(total_evader_dv)
         
         # 보상 정보
         evader_reward = termination_details.get('evader_reward', info.get('evader_reward', 0))
@@ -144,7 +152,8 @@ class EvasionTrackingCallback(BaseCallback):
                 info.get('final_distance') or
                 info.get('relative_distance_m') or
                 info.get('relative_distance') or 0
-            )
+            ),
+            'total_evader_delta_v': total_evader_dv,
         }
         self.episodes_info.append(episode_info)
         
@@ -173,7 +182,25 @@ class EvasionTrackingCallback(BaseCallback):
             self.fuel_depleted += 1
         elif 'max_steps' in outcome:
             self.max_steps += 1
-    
+
+    def _extract_total_delta_v(self, info, termination_details):
+        """에피소드 전체 Delta-V 추출"""
+        candidates = [
+            info.get('total_evader_delta_v'),
+            termination_details.get('delta_v_used') if termination_details else None,
+            info.get('evader_total_delta_v_ms'),
+            termination_details.get('evader_total_delta_v_ms') if termination_details else None,
+        ]
+
+        for value in candidates:
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
     def _print_progress_log(self):
         """진행 상황 로그 출력"""
         success_rate = self.success_rates[-1] if self.success_rates else 0
@@ -184,11 +211,16 @@ class EvasionTrackingCallback(BaseCallback):
         print(f"  - 결과 분포: 포획={self.captures}, 영구회피={self.permanent_evasions}, "
               f"조건부회피={self.conditional_evasions}, 임시회피={self.temporary_evasions}, "
               f"연료소진={self.fuel_depleted}, 최대스텝={self.max_steps}")
-        
+
         # 버퍼 시간 통계
         if self.buffer_time_stats:
             print(f"  - 평균 버퍼 시간: {np.mean(self.buffer_time_stats):.2f}초")
-        
+
+        if self.evader_delta_vs:
+            window_values = list(self.delta_v_window) if self.delta_v_window else self.evader_delta_vs
+            print(f"  - 최근 평균 ΔV 사용량: {np.mean(window_values):.2f} m/s")
+            print(f"  - 누적 ΔV 평균: {np.mean(self.evader_delta_vs):.2f} m/s")
+
         # Nash Equilibrium 메트릭 출력
         if len(self.nash_equilibrium_metrics) > 0:
             print(f"  - Nash Equilibrium 메트릭: {self.nash_equilibrium_metrics[-1]:.4f}")
@@ -271,6 +303,12 @@ class EvasionTrackingCallback(BaseCallback):
         except Exception as e:
             if self.verbose > 0:
                 print(f"플롯 생성 중 오류: {e}")
+
+        try:
+            plot_delta_v_per_episode(self.evader_delta_vs, self.log_dir)
+        except Exception as e:
+            if self.verbose > 0:
+                print(f"Delta-V 플롯 생성 중 오류: {e}")
     
     def on_training_end(self):
         """학습 종료 시 최종 결과 저장"""
@@ -295,7 +333,8 @@ class EvasionTrackingCallback(BaseCallback):
             "temporary_evasions": self.temporary_evasions,
             "fuel_depleted": self.fuel_depleted,
             "max_steps": self.max_steps,
-            "episodes_info": self.episodes_info[-100:]  # 마지막 100개만 저장
+            "episodes_info": self.episodes_info[-100:],  # 마지막 100개만 저장
+            "evader_delta_v": self.evader_delta_vs,
         }
         
         stats_path = os.path.join(self.log_dir, "evasion_stats.json")
@@ -322,7 +361,7 @@ class PerformanceCallback(BaseCallback):
         self.episode_rewards = []
         self.episode_lengths = []
         self.success_rates = []
-        self.outcome_counts = []
+        self.outcome_counter = Counter()
         self.evader_rewards = []
         self.pursuer_rewards = []
         self.nash_metrics = []
@@ -331,61 +370,85 @@ class PerformanceCallback(BaseCallback):
         
         # 윈도우 사이즈
         self.window_size = 100
-        
+        self.success_window = deque(maxlen=self.window_size)
+
     def _on_step(self) -> bool:
-        # 에피소드 종료 시
-        if self.locals.get("dones", [False])[0]:
+        dones = self.locals.get("dones", [False])
+        infos = self.locals.get("infos", [{}])
+
+        if not isinstance(dones, (list, tuple, np.ndarray)):
+            dones = [dones]
+        if not isinstance(infos, (list, tuple)):
+            infos = [infos]
+
+        for env_idx, done in enumerate(dones):
+            if not done:
+                continue
+
+            info_index = env_idx if env_idx < len(infos) else -1
+            env_info = infos[info_index] if infos else {}
+
+            final_info = env_info.get('final_info') if isinstance(env_info, dict) else None
+            if isinstance(final_info, (list, tuple)):
+                final_info = final_info[0] if final_info else None
+            if final_info is None:
+                final_info = env_info if isinstance(env_info, dict) else {}
+
+            if not isinstance(final_info, dict):
+                final_info = {}
+
             self.episode_count += 1
-            
-            # 정보 추출
-            info = self.locals.get("infos", [{}])[0]
-            
-            # 보상 저장
-            episode_reward = info.get("episode", {}).get("r", 0)
+
+            episode_data = final_info.get("episode", {})
+            episode_reward = episode_data.get("r", final_info.get("evader_reward", 0.0))
+            episode_length = episode_data.get("l", final_info.get("episode_length", 0))
             self.episode_rewards.append(episode_reward)
-            
-            # 성공 여부
-            success = info.get("success", False)
-            
-            # 성공률 계산 (이동 평균)
-            recent_successes = [1 if info.get("success", False) else 0]
-            if len(self.success_rates) > 0:
-                # 최근 100개 에피소드의 성공률
-                window_start = max(0, len(self.episode_rewards) - self.window_size)
-                window_rewards = self.episode_rewards[window_start:]
-                window_success_count = sum(1 for r in window_rewards if r > 0)  # 보상이 양수면 성공으로 간주
-                success_rate = window_success_count / len(window_rewards)
-            else:
-                success_rate = 1.0 if success else 0.0
-                
+            self.episode_lengths.append(episode_length)
+
+            evader_reward = final_info.get("evader_reward", episode_reward)
+            pursuer_reward = final_info.get("pursuer_reward", -evader_reward)
+            self.evader_rewards.append(evader_reward)
+            self.pursuer_rewards.append(pursuer_reward)
+            self.nash_metrics.append(final_info.get("nash_metric", 0.0))
+            self.buffer_times.append(final_info.get("buffer_time", 0.0))
+
+            outcome = str(final_info.get("outcome", "unknown")).lower()
+            self.outcome_counter[outcome] += 1
+
+            success = outcome in [
+                'permanent_evasion',
+                'conditional_evasion',
+                'temporary_evasion',
+                'max_steps_reached',
+            ]
+            self.success_window.append(1 if success else 0)
+            success_rate = float(np.mean(self.success_window)) if self.success_window else 0.0
             self.success_rates.append(success_rate)
-            
-            # 기타 메트릭
-            self.evader_rewards.append(info.get("evader_reward", episode_reward))
-            self.pursuer_rewards.append(info.get("pursuer_reward", -episode_reward))
-            self.nash_metrics.append(info.get("nash_metric", 0))
-            self.buffer_times.append(info.get("buffer_time", 0))
-            
-            # Verbose 출력
+
             if self.verbose > 0 and self.episode_count % 10 == 0:
                 print(f"\n에피소드 {self.episode_count}:")
                 print(f"  보상: {episode_reward:.2f}")
-                print(f"  성공률: {success_rate:.1%}")
+                print(f"  성공률(최근 {len(self.success_window)}): {success_rate:.1%}")
                 print(f"  Nash 메트릭: {self.nash_metrics[-1]:.3f}")
                 print(f"  타임스텝: {self.num_timesteps}")
-            
-            # 주기적으로 플롯 저장
+
             if self.episode_count % self.plot_freq == 0:
                 self._save_plots()
-                
+
         return True
-    
+
     def _save_plots(self):
         """플롯 저장"""
         try:
             plot_training_progress(
                 success_rates=self.success_rates,
-                outcome_counts=self.outcome_counts,
+                outcome_counts=[
+                    self.outcome_counter.get('captured', 0),
+                    self.outcome_counter.get('permanent_evasion', 0),
+                    self.outcome_counter.get('conditional_evasion', 0),
+                    self.outcome_counter.get('fuel_depleted', 0),
+                    self.outcome_counter.get('max_steps_reached', 0),
+                ],
                 evader_rewards=self.evader_rewards,
                 pursuer_rewards=self.pursuer_rewards,
                 nash_metrics=self.nash_metrics,
@@ -556,26 +619,41 @@ class EphemerisLoggerCallback(BaseCallback):
         
         
         # 에피소드 종료 확인
-        done = self.locals.get('dones', [False])[0]
-        if done and self.is_recording:
-            # 현재 에피소드 데이터를 저장
+        dones = self.locals.get('dones', [False])
+        infos = self.locals.get('infos', [{}])
+
+        if not isinstance(dones, (list, tuple, np.ndarray)):
+            dones = [dones]
+        if not isinstance(infos, (list, tuple)):
+            infos = [infos]
+
+        for env_idx, done in enumerate(dones):
+            if not done or not self.is_recording:
+                continue
+
+            info_index = env_idx if env_idx < len(infos) else -1
+            env_info = infos[info_index] if infos else {}
+            final_info = env_info.get('final_info') if isinstance(env_info, dict) else None
+            if isinstance(final_info, (list, tuple)):
+                final_info = final_info[0] if final_info else None
+            if final_info is None:
+                final_info = env_info if isinstance(env_info, dict) else {}
+
             if self.current_episode_data['times']:
                 episode_data = {
                     't': np.array(self.current_episode_data['times']),
                     'evader': np.array(self.current_episode_data['evader_states']),
                     'pursuer': np.array(self.current_episode_data['pursuer_states']),
-                    'outcome': self.locals.get('infos', [{}])[0].get('outcome', 'unknown')
+                    'outcome': final_info.get('outcome', 'unknown')
                 }
                 self.final_episodes.append(episode_data)
-                
-                # 최근 N개만 유지
+
                 if len(self.final_episodes) > self.record_last_n_episodes:
                     self.final_episodes.pop(0)
-                
+
                 if self.verbose > 0:
                     print(f"에피소드 ECI 데이터 저장 (총 {len(self.final_episodes)}개)")
-            
-            # 현재 에피소드 데이터 초기화
+
             self.current_episode_data = {
                 'times': [],
                 'evader_states': [],
