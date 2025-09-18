@@ -7,6 +7,7 @@ import argparse
 import sys
 import os
 import warnings
+import math
 from typing import Optional
 
 # 경고 필터링 (프로덕션 모드)
@@ -119,7 +120,34 @@ def train_nash_model(config: ProjectConfig, save_path: Optional[str] = None) -> 
 def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
     """모델 평가"""
     print(f"\n=== 모델 평가 시작 ({n_tests} 시나리오) ===")
-    
+
+    def print_orbital_elements(label: str, elements: Optional[dict]):
+        """초기 궤도 요소를 보기 좋게 출력"""
+        if not elements:
+            print(f"      {label}: 데이터 없음")
+            return
+
+        a = elements.get('a')
+        e = elements.get('e')
+        inc = elements.get('i')
+        raan = elements.get('RAAN')
+        omega = elements.get('omega')
+        mean_anom = elements.get('M')
+
+        print(f"      {label}:")
+        if a is not None:
+            print(f"        a: {a / 1000:.2f} km")
+        if e is not None:
+            print(f"        e: {e:.6f}")
+        if inc is not None:
+            print(f"        i: {math.degrees(inc):.3f}°")
+        if raan is not None:
+            print(f"        RAAN: {math.degrees(raan):.3f}°")
+        if omega is not None:
+            print(f"        omega: {math.degrees(omega):.3f}°")
+        if mean_anom is not None:
+            print(f"        M: {math.degrees(mean_anom):.3f}°")
+
     # 평가용 단일 환경
     env = (PursuitEvasionEnvGASTM(config)
            if config.environment.use_gastm else PursuitEvasionEnv(config))
@@ -155,6 +183,13 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
                 print(f"    회피자 총 delta-v: {evader_delta_v:.2f} m/s")
             else:
                 print("    회피자 총 delta-v: 데이터 없음")
+
+            evader_orbit = res.get('initial_evader_orbital_elements')
+            pursuer_orbit = res.get('initial_pursuer_orbital_elements')
+            if evader_orbit or pursuer_orbit:
+                print("    초기 궤도 요소:")
+                print_orbital_elements("Evader", evader_orbit)
+                print_orbital_elements("Pursuer", pursuer_orbit)
 
     # 결과 요약 출력
     summary = results['summary']

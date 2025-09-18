@@ -205,11 +205,20 @@ class ModelEvaluator:
             states, actions_e, actions_p, rewards, info
         )
         metrics.update(additional_metrics)
-        
+
         # 궤적 품질 분석
         trajectory_quality = analyze_trajectory_quality(states, actions_e)
         metrics.update(trajectory_quality)
-        
+
+        # 초기 궤도 요소 저장 (평가 로그용)
+        evader_elements = info.get('initial_evader_orbital_elements')
+        if evader_elements:
+            metrics['initial_evader_orbital_elements'] = dict(evader_elements)
+
+        pursuer_elements = info.get('initial_pursuer_orbital_elements')
+        if pursuer_elements:
+            metrics['initial_pursuer_orbital_elements'] = dict(pursuer_elements)
+
         # 시나리오 결과 패키징
         scenario_result = {
             'metrics': metrics,
