@@ -188,7 +188,8 @@ if has_trajectory
     xlabel('X [m]'); ylabel('Y [m]'); zlabel('Z [m]');
     title(sprintf('Relative Trajectory - Outcome: %s', mission_outcome));
     axis equal; view(45, 25);
-    colorbar('Label', 'Step progression');
+    cb = colorbar;
+    ylabel(cb, 'Step progression');
 else
     subplot(2, 3, [1, 4]);
     axis off;
