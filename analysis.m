@@ -26,273 +26,652 @@ config.figure_formats = {'png'};   % Formats used when saving figures
 config.output_dir = '';            % Optional override for figure output path
 config.verbose = true;             % Display progress information
 
-%% ------------------------------------------------------------------------
-%  SELECT LOG DIRECTORY
-%% ------------------------------------------------------------------------
-[run_info, config] = resolve_run_directory(config);
-plots_dir = fullfile(run_info.path, 'plots');
-analysis_dir = fullfile(run_info.path, 'analysis');
-if isempty(config.output_dir)
-    export_dir = fullfile(run_info.path, 'matlab_analysis');
-else
-    export_dir = config.output_dir;
-end
-if config.save_figures && ~exist(export_dir, 'dir')
-    mkdir(export_dir);
-end
-
-if config.verbose
-    fprintf('=====================================\n');
-    fprintf('Selected training run : %s\n', run_info.name);
-    fprintf('Log directory         : %s\n', run_info.path);
-    fprintf('Output directory      : %s\n', export_dir);
-    fprintf('=====================================\n\n');
-end
+% Additional switches for test-result batches
+config.analysis_mode = 'training';     % 'training' or 'test'
+config.test_results_root = './test_results';
+config.target_test_run = '';
+config.test_case_filter = [];          % e.g., [1 3 5] to inspect selected tests
 
 %% ------------------------------------------------------------------------
-%  LOAD AVAILABLE DATA SETS
+%  DATA SELECTION AND PREPARATION
+%% ------------------------------------------------------------------------
+analysis_cases = struct([]);
+export_root = '';
+
+mode = lower(char(string(config.analysis_mode)));
+
+switch mode
+    case 'training'
+        [run_info, config] = resolve_run_directory(config);
+        plots_dir = fullfile(run_info.path, 'plots');
+        analysis_dir = fullfile(run_info.path, 'analysis');
+        if isempty(config.output_dir)
+            export_root = fullfile(run_info.path, 'matlab_analysis');
+        else
+            export_root = config.output_dir;
+        end
+        if config.save_figures && ~exist(export_root, 'dir')
+            mkdir(export_root);
+        end
+
+        if config.verbose
+            fprintf('=====================================\n');
+            fprintf('Selected training run : %s\n', run_info.name);
+            fprintf('Log directory         : %s\n', run_info.path);
+            fprintf('Output directory      : %s\n', export_root);
+            fprintf('=====================================\n\n');
+        end
+
+        files.stats = fullfile(plots_dir, 'evasion_stats.json');
+        files.progress = fullfile(plots_dir, 'training_progress.json');
+        files.delta_v_csv = fullfile(plots_dir, 'evader_delta_v.csv');
+        files.analysis_json = fullfile(analysis_dir, 'analysis_data.json');
+        files.ephemeris_mat = fullfile(run_info.path, 'final_episode_ephemeris.mat');
+
+        stats = load_json_if_exists(files.stats);
+        progress = load_json_if_exists(files.progress);
+        analysis_data = load_json_if_exists(files.analysis_json);
+        delta_v_table = load_table_if_exists(files.delta_v_csv);
+        ephemeris = load_mat_if_exists(files.ephemeris_mat);
+
+        episodes = extract_episode_array(analysis_data);
+        primary_episode = struct();
+        if ~isempty(episodes)
+            primary_episode = episodes(1);
+        end
+
+        trajectory = struct();
+        if ~isempty(primary_episode) && isfield(primary_episode, 'positions')
+            pos_mat = ensure_matrix(primary_episode.positions, 3);
+            vel_mat = ensure_matrix(primary_episode.velocities, 3);
+            trajectory.x = pos_mat(:, 1);
+            trajectory.y = pos_mat(:, 2);
+            trajectory.z = pos_mat(:, 3);
+            trajectory.vx = vel_mat(:, 1);
+            trajectory.vy = vel_mat(:, 2);
+            trajectory.vz = vel_mat(:, 3);
+            trajectory.distances = ensure_vector(primary_episode.distances);
+            trajectory.times = ensure_vector(primary_episode.times);
+        end
+
+        if ~isempty(trajectory) && (~isfield(trajectory, 'distances') || isempty(trajectory.distances))
+            trajectory.distances = sqrt(trajectory.x.^2 + trajectory.y.^2 + trajectory.z.^2);
+        end
+
+        if ~isempty(trajectory) && (~isfield(trajectory, 'times') || isempty(trajectory.times))
+            n_points = numel(trajectory.distances);
+            trajectory.times = (0:n_points-1)';
+        end
+
+        step_dv = struct();
+        if ~isempty(primary_episode)
+            step_dv.evader_vectors = ensure_matrix(primary_episode.evader_dv_vectors, 3);
+            step_dv.pursuer_vectors = ensure_matrix(primary_episode.pursuer_dv_vectors, 3);
+            step_dv.evader_magnitude = ensure_vector(primary_episode.evader_dvs);
+            step_dv.pursuer_magnitude = ensure_vector(primary_episode.pursuer_dvs);
+            step_dv.times = trajectory.times;
+            if isempty(step_dv.evader_magnitude) && ~isempty(step_dv.evader_vectors)
+                step_dv.evader_magnitude = vecnorm(step_dv.evader_vectors, 2, 2);
+            end
+            if isempty(step_dv.pursuer_magnitude) && ~isempty(step_dv.pursuer_vectors)
+                step_dv.pursuer_magnitude = vecnorm(step_dv.pursuer_vectors, 2, 2);
+            end
+        end
+
+        per_episode_dv = [];
+        if isstruct(stats) && isfield(stats, 'evader_delta_v') && ~isempty(stats.evader_delta_v)
+            per_episode_dv = stats.evader_delta_v(:);
+        end
+        if isempty(per_episode_dv) && istable(delta_v_table)
+            if ismember('delta_v', delta_v_table.Properties.VariableNames)
+                per_episode_dv = delta_v_table.delta_v(:);
+            elseif ismember('Var2', delta_v_table.Properties.VariableNames)
+                per_episode_dv = delta_v_table.Var2(:);
+            end
+        end
+
+        mission_outcome = 'UNKNOWN';
+        if ~isempty(primary_episode) && isfield(primary_episode, 'outcome')
+            mission_outcome = upper(string(primary_episode.outcome));
+        elseif isstruct(stats) && isfield(stats, 'episodes_info') && ~isempty(stats.episodes_info)
+            mission_outcome = upper(string(stats.episodes_info(end).outcome));
+        end
+
+        case_struct = struct( ...
+            'label', char(run_info.name), ...
+            'file_prefix', sanitize_label(run_info.name), ...
+            'trajectory', trajectory, ...
+            'step_dv', step_dv, ...
+            'ephemeris', ephemeris, ...
+            'per_episode_dv', ensure_vector(per_episode_dv), ...
+            'progress', progress, ...
+            'stats', stats, ...
+            'mission_outcome', mission_outcome, ...
+            'export_dir', export_root);
+
+        analysis_cases = case_struct;
+
+    case 'test'
+        test_config = struct( ...
+            'logs_root', config.test_results_root, ...
+            'target_run', config.target_test_run, ...
+            'experiment_filter', '*');
+
+        [run_info, ~] = resolve_run_directory(test_config);
+
+        if isempty(config.output_dir)
+            export_root = fullfile(run_info.path, 'matlab_analysis');
+        else
+            export_root = config.output_dir;
+        end
+        if config.save_figures && ~exist(export_root, 'dir')
+            mkdir(export_root);
+        end
+
+        if config.verbose
+            fprintf('=====================================\n');
+            fprintf('Selected test batch     : %s\n', run_info.name);
+            fprintf('Test results directory  : %s\n', run_info.path);
+            fprintf('Output directory        : %s\n', export_root);
+            fprintf('=====================================\n\n');
+        end
+
+        summary_csv = fullfile(run_info.path, 'test_results.csv');
+        summary_entries = normalize_test_summary(load_table_if_exists(summary_csv));
+
+        traj_files = dir(fullfile(run_info.path, 'test_*_trajectory_trajectory_data.json'));
+        test_ids = arrayfun(@(f) parse_test_identifier(f.name), traj_files);
+        test_ids = unique(test_ids(~isnan(test_ids)));
+
+        if ~isempty(config.test_case_filter)
+            filter_ids = config.test_case_filter(:)';
+            test_ids = intersect(test_ids, filter_ids);
+        end
+        test_ids = sort(test_ids);
+
+        if isempty(test_ids)
+            error('No test trajectory files found in %s', run_info.path);
+        end
+
+        analysis_cases = struct([]);
+        for idx = 1:numel(test_ids)
+            test_id = test_ids(idx);
+            label = sprintf('test_%d', test_id);
+            file_prefix = sanitize_label(label);
+
+            trajectory = struct();
+            traj_json = load_json_if_exists(fullfile(run_info.path, sprintf('%s_trajectory_trajectory_data.json', label)));
+            if isstruct(traj_json) && ~isempty(fieldnames(traj_json))
+                components = {'x', 'y', 'z', 'vx', 'vy', 'vz'};
+                for cidx = 1:numel(components)
+                    field = components{cidx};
+                    if isfield(traj_json, field)
+                        trajectory.(field) = ensure_vector(traj_json.(field));
+                    end
+                end
+            end
+
+            if isfield(trajectory, 'x') && ~isempty(trajectory.x) && ...
+                    isfield(trajectory, 'y') && ~isempty(trajectory.y) && ...
+                    isfield(trajectory, 'z') && ~isempty(trajectory.z)
+                trajectory.distances = sqrt(trajectory.x.^2 + trajectory.y.^2 + trajectory.z.^2);
+            end
+
+            if ~isfield(trajectory, 'times') || isempty(trajectory.times)
+                trajectory.times = [];
+            end
+
+            step_dv = struct();
+            dv_json = load_json_if_exists(fullfile(run_info.path, sprintf('%s_delta_v.json', label)));
+            if isstruct(dv_json) && ~isempty(fieldnames(dv_json))
+                if isfield(dv_json, 'evader_delta_v')
+                    step_dv.evader_vectors = ensure_matrix(dv_json.evader_delta_v, 3);
+                end
+                if isfield(dv_json, 'pursuer_delta_v')
+                    step_dv.pursuer_vectors = ensure_matrix(dv_json.pursuer_delta_v, 3);
+                end
+                if isfield(dv_json, 'evader_delta_v_norm')
+                    step_dv.evader_magnitude = ensure_vector(dv_json.evader_delta_v_norm);
+                end
+                if isfield(dv_json, 'pursuer_delta_v_norm')
+                    step_dv.pursuer_magnitude = ensure_vector(dv_json.pursuer_delta_v_norm);
+                end
+                if isfield(dv_json, 'time')
+                    step_dv.times = ensure_vector(dv_json.time);
+                end
+                if (~isfield(step_dv, 'evader_magnitude') || isempty(step_dv.evader_magnitude)) && isfield(step_dv, 'evader_vectors')
+                    step_dv.evader_magnitude = vecnorm(step_dv.evader_vectors, 2, 2);
+                end
+                if (~isfield(step_dv, 'pursuer_magnitude') || isempty(step_dv.pursuer_magnitude)) && isfield(step_dv, 'pursuer_vectors')
+                    step_dv.pursuer_magnitude = vecnorm(step_dv.pursuer_vectors, 2, 2);
+                end
+            end
+
+            if (~isfield(trajectory, 'times') || isempty(trajectory.times)) && isfield(step_dv, 'times') && ~isempty(step_dv.times)
+                trajectory.times = step_dv.times;
+            end
+            if (~isfield(trajectory, 'distances') || isempty(trajectory.distances)) && isfield(trajectory, 'x') && ~isempty(trajectory.x)
+                trajectory.distances = sqrt(trajectory.x.^2 + trajectory.y.^2 + trajectory.z.^2);
+            end
+            if (~isfield(trajectory, 'times') || isempty(trajectory.times)) && isfield(trajectory, 'x') && ~isempty(trajectory.x)
+                trajectory.times = (0:numel(trajectory.x)-1)';
+            end
+
+            ephemeris = struct();
+            eci_json = load_json_if_exists(fullfile(run_info.path, sprintf('%s_eci_eci.json', label)));
+            if isstruct(eci_json) && isfield(eci_json, 't') && ~isempty(eci_json.t)
+                ephemeris.t = ensure_vector(eci_json.t);
+                evader_x = ensure_vector(extract_field(eci_json, {'evader_x'}));
+                evader_y = ensure_vector(extract_field(eci_json, {'evader_y'}));
+                evader_z = ensure_vector(extract_field(eci_json, {'evader_z'}));
+                pursuer_x = ensure_vector(extract_field(eci_json, {'pursuer_x'}));
+                pursuer_y = ensure_vector(extract_field(eci_json, {'pursuer_y'}));
+                pursuer_z = ensure_vector(extract_field(eci_json, {'pursuer_z'}));
+                if ~isempty(evader_x) && ~isempty(evader_y) && ~isempty(evader_z)
+                    ephemeris.evader = [evader_x, evader_y, evader_z];
+                end
+                if ~isempty(pursuer_x) && ~isempty(pursuer_y) && ~isempty(pursuer_z)
+                    ephemeris.pursuer = [pursuer_x, pursuer_y, pursuer_z];
+                end
+            end
+
+            summary = find_summary_for_test(summary_entries, test_id);
+            success_flag = NaN;
+            per_episode_value = [];
+            if ~isempty(fieldnames(summary))
+                if isfield(summary, 'success')
+                    success_flag = parse_boolean(summary.success);
+                end
+                per_episode_value = extract_field(summary, { ...
+                    'evader_total_delta_v_ms', ...
+                    'total_evader_delta_v', ...
+                    'evader_delta_v'});
+                if isempty(per_episode_value)
+                    per_episode_value = extract_field(summary, {'total_evader_delta_v_ms'});
+                end
+            end
+
+            if isempty(per_episode_value) && isfield(step_dv, 'evader_magnitude') && ~isempty(step_dv.evader_magnitude)
+                per_episode_value = step_dv.evader_magnitude(end);
+            end
+
+            if isnan(success_flag)
+                mission_outcome = 'UNKNOWN';
+            elseif success_flag
+                mission_outcome = 'SUCCESS';
+            else
+                mission_outcome = 'FAILURE';
+            end
+
+            per_episode_vec = ensure_vector(per_episode_value);
+            progress_case = struct();
+            if ~isnan(success_flag)
+                progress_case.success_rates = double(success_flag);
+            else
+                progress_case.success_rates = [];
+            end
+
+            stats_case = struct();
+            if ~isnan(success_flag)
+                stats_case.total_episodes = 1;
+                stats_case.final_success_rate = double(success_flag);
+                stats_case.captures = double(~success_flag);
+                stats_case.fuel_depleted = 0;
+                stats_case.episodes_info = struct('outcome', mission_outcome);
+            else
+                stats_case.total_episodes = [];
+                stats_case.final_success_rate = [];
+                stats_case.captures = [];
+                stats_case.fuel_depleted = [];
+                stats_case.episodes_info = [];
+            end
+
+            case_struct = struct( ...
+                'label', label, ...
+                'file_prefix', file_prefix, ...
+                'trajectory', trajectory, ...
+                'step_dv', step_dv, ...
+                'ephemeris', ephemeris, ...
+                'per_episode_dv', per_episode_vec, ...
+                'progress', progress_case, ...
+                'stats', stats_case, ...
+                'mission_outcome', mission_outcome, ...
+                'export_dir', export_root);
+
+            if isempty(analysis_cases)
+                analysis_cases = case_struct;
+            else
+                analysis_cases(end + 1) = case_struct; %#ok<AGROW>
+            end
+        end
+
+    otherwise
+        error('Unsupported analysis_mode: %s', config.analysis_mode);
+end
+
+%% ------------------------------------------------------------------------
+%  GLOBAL CONSTANTS USED DURING VISUALIZATION
 %% ------------------------------------------------------------------------
 const.R_EARTH = 6378e3;                % Earth radius [m]
 const.MU_EARTH = 3.986004418e14;       % Earth gravitational parameter [m^3/s^2]
 const.CAPTURE_RADIUS = 1e3;            % Capture distance [m]
 const.EVASION_RADIUS = 5e3;            % Evasion distance [m]
 
-files.stats = fullfile(plots_dir, 'evasion_stats.json');
-files.progress = fullfile(plots_dir, 'training_progress.json');
-files.delta_v_csv = fullfile(plots_dir, 'evader_delta_v.csv');
-files.analysis_json = fullfile(analysis_dir, 'analysis_data.json');
-files.ephemeris_mat = fullfile(run_info.path, 'final_episode_ephemeris.mat');
-
-stats = load_json_if_exists(files.stats);
-progress = load_json_if_exists(files.progress);
-analysis_data = load_json_if_exists(files.analysis_json);
-delta_v_table = load_table_if_exists(files.delta_v_csv);
-ephemeris = load_mat_if_exists(files.ephemeris_mat);
-
-%% ------------------------------------------------------------------------
-%  BUILD PRIMARY EPISODE DATA (FIRST COMPLETED EPISODE)
-%% ------------------------------------------------------------------------
-episodes = extract_episode_array(analysis_data);
-primary_episode = struct();
-if ~isempty(episodes)
-    primary_episode = episodes(1);
+if isempty(analysis_cases)
+    error('No analysis cases prepared for visualization.');
 end
 
-trajectory = struct();
-if ~isempty(primary_episode) && isfield(primary_episode, 'positions')
-    pos_mat = ensure_matrix(primary_episode.positions, 3);
-    vel_mat = ensure_matrix(primary_episode.velocities, 3);
-    trajectory.x = pos_mat(:, 1);
-    trajectory.y = pos_mat(:, 2);
-    trajectory.z = pos_mat(:, 3);
-    trajectory.vx = vel_mat(:, 1);
-    trajectory.vy = vel_mat(:, 2);
-    trajectory.vz = vel_mat(:, 3);
-    trajectory.distances = ensure_vector(primary_episode.distances);
-    trajectory.times = ensure_vector(primary_episode.times);
-else
-    trajectory = struct();
-end
-
-% Fallback to derived distances if not provided
-if ~isempty(trajectory) && (~isfield(trajectory, 'distances') || isempty(trajectory.distances))
-    trajectory.distances = sqrt(trajectory.x.^2 + trajectory.y.^2 + trajectory.z.^2);
-end
-
-if ~isempty(trajectory) && (~isfield(trajectory, 'times') || isempty(trajectory.times))
-    n_points = numel(trajectory.distances);
-    trajectory.times = (0:n_points-1)';
-end
-
-% Delta-V per step
-step_dv = struct();
-if ~isempty(primary_episode)
-    step_dv.evader_vectors = ensure_matrix(primary_episode.evader_dv_vectors, 3);
-    step_dv.pursuer_vectors = ensure_matrix(primary_episode.pursuer_dv_vectors, 3);
-    step_dv.evader_magnitude = ensure_vector(primary_episode.evader_dvs);
-    step_dv.pursuer_magnitude = ensure_vector(primary_episode.pursuer_dvs);
-    step_dv.times = trajectory.times;
-    if isempty(step_dv.evader_magnitude) && ~isempty(step_dv.evader_vectors)
-        step_dv.evader_magnitude = vecnorm(step_dv.evader_vectors, 2, 2);
+num_cases = numel(analysis_cases);
+for idx = 1:num_cases
+    case_data = analysis_cases(idx);
+    if config.verbose
+        fprintf('Processing case %d/%d : %s\n', idx, num_cases, case_data.label);
     end
-    if isempty(step_dv.pursuer_magnitude) && ~isempty(step_dv.pursuer_vectors)
-        step_dv.pursuer_magnitude = vecnorm(step_dv.pursuer_vectors, 2, 2);
-    end
+    generate_case_figures(case_data, const, config);
 end
-
-% Episode summary list for per-episode analytics
-per_episode_dv = [];
-if isstruct(stats) && isfield(stats, 'evader_delta_v') && ~isempty(stats.evader_delta_v)
-    per_episode_dv = stats.evader_delta_v(:);
-end
-if isempty(per_episode_dv) && isstruct(delta_v_table)
-    if isfield(delta_v_table, 'delta_v')
-        per_episode_dv = delta_v_table.delta_v(:);
-    elseif isfield(delta_v_table, 'Var2')
-        per_episode_dv = delta_v_table.Var2(:);
-    end
-end
-
-mission_outcome = 'UNKNOWN';
-if ~isempty(primary_episode) && isfield(primary_episode, 'outcome')
-    mission_outcome = upper(string(primary_episode.outcome));
-elseif isstruct(stats) && isfield(stats, 'episodes_info') && ~isempty(stats.episodes_info)
-    mission_outcome = upper(string(stats.episodes_info(end).outcome));
-end
-
-%% ------------------------------------------------------------------------
-%  DERIVED METRICS
-%% ------------------------------------------------------------------------
-has_trajectory = isfield(trajectory, 'x') && ~isempty(trajectory.x);
-has_deltav = isfield(step_dv, 'evader_magnitude') && ~isempty(step_dv.evader_magnitude);
-has_ephemeris = ~isempty(ephemeris) && all(isfield(ephemeris, {'t', 'evader', 'pursuer'}));
-
-if has_trajectory
-    rel_distance = trajectory.distances(:);
-    rel_velocity = sqrt(trajectory.vx.^2 + trajectory.vy.^2 + trajectory.vz.^2);
-    time_axis = trajectory.times;
-else
-    rel_distance = [];
-    rel_velocity = [];
-    time_axis = [];
-end
-
-dt_seconds = []; 
-if numel(time_axis) > 1
-    dt_seconds = median(diff(time_axis));
-end
-
-if has_deltav
-    evader_cumulative = cumsum(step_dv.evader_magnitude);
-    pursuer_cumulative = cumsum(step_dv.pursuer_magnitude);
-else
-    evader_cumulative = [];
-    pursuer_cumulative = [];
-end
-
-%% ------------------------------------------------------------------------
-%  FIGURE 1: RELATIVE TRAJECTORY (LVLH)
-%% ------------------------------------------------------------------------
-fig1 = figure('Name', 'Relative Trajectory (LVLH)', 'Position', [80, 80, 1400, 900], 'Color', 'white');
-
-if has_trajectory
-    subplot(2, 3, [1, 4]);
-    hold on; grid on; box on;
-    c = linspace(0, 1, numel(trajectory.x));
-    surface([trajectory.x; nan], [trajectory.y; nan], [trajectory.z; nan], [c'; nan], ...
-            'EdgeColor', 'interp', 'FaceColor', 'none', 'LineWidth', 2.5);
-    plot3(0, 0, 0, 'o', 'MarkerSize', 10, 'MarkerFaceColor', [0 0.8 0], 'MarkerEdgeColor', 'k');
-    plot3(trajectory.x(1), trajectory.y(1), trajectory.z(1), '^', 'MarkerSize', 9, 'MarkerFaceColor', [0.8 0 0], 'MarkerEdgeColor', 'k');
-    plot3(trajectory.x(end), trajectory.y(end), trajectory.z(end), 's', 'MarkerSize', 9, 'MarkerFaceColor', [0.2 0.2 0.2], 'MarkerEdgeColor', 'k');
-    draw_zone_spheres(const);
-    xlabel('X [m]'); ylabel('Y [m]'); zlabel('Z [m]');
-    title(sprintf('Relative Trajectory - Outcome: %s', mission_outcome));
-    axis equal; view(45, 25);
-    cb = colorbar;
-    ylabel(cb, 'Step progression');
-else
-    subplot(2, 3, [1, 4]);
-    axis off;
-    text(0.5, 0.5, 'Relative position data not available', 'HorizontalAlignment', 'center');
-end
-
-t = time_axis;
-if isempty(t)
-    t = (0:numel(rel_distance)-1)';
-end
-
-subplot(2, 3, 2);
-if ~isempty(rel_distance)
-    hold on; grid on; box on;
-    plot(t, rel_distance, 'b-', 'LineWidth', 2);
-    yline(const.CAPTURE_RADIUS, 'r--', 'LineWidth', 1.2);
-    yline(const.EVASION_RADIUS, 'g--', 'LineWidth', 1.2);
-    xlabel('Time [s]'); ylabel('Distance [m]');
-    title('Relative Distance Evolution');
-else
-    axis off; text(0.5, 0.5, 'Distance series unavailable', 'HorizontalAlignment', 'center');
-end
-
-subplot(2, 3, 3);
-if ~isempty(rel_velocity)
-    hold on; grid on; box on;
-    plot(t, trajectory.vx, 'r-');
-    plot(t, trajectory.vy, 'g-');
-    plot(t, trajectory.vz, 'b-');
-    plot(t, rel_velocity, 'k--', 'LineWidth', 2);
-    xlabel('Time [s]'); ylabel('Velocity [m/s]');
-    title('Relative Velocity Components');
-    legend('V_x', 'V_y', 'V_z', '|V|', 'Location', 'best');
-else
-    axis off; text(0.5, 0.5, 'Velocity data not available', 'HorizontalAlignment', 'center');
-end
-
-subplot(2, 3, 5);
-if ~isempty(rel_distance)
-    hold on; grid on; box on;
-    scatter(trajectory.x, trajectory.vx, 20, c, 'filled');
-    xlabel('Position X [m]'); ylabel('Velocity V_x [m/s]');
-    title('Phase Space (X vs V_x)');
-    colorbar('Label', 'Step progression');
-else
-    axis off; text(0.5, 0.5, 'Phase space unavailable', 'HorizontalAlignment', 'center');
-end
-
-subplot(2, 3, 6);
-if ~isempty(rel_distance)
-    hold on; grid on; box on;
-    distance_rate = [0; diff(rel_distance)];
-    plot(t, distance_rate, 'b-', 'LineWidth', 1.5);
-    yline(0, 'k--');
-    xlabel('Time [s]'); ylabel('ΔDistance [m]');
-    title('Closing / Opening Rate');
-else
-    axis off;
-end
-
-save_figure_if_needed(fig1, 'relative_trajectory', export_dir, config);
-
-%% ------------------------------------------------------------------------
-%  FIGURE 2: ECI TRAJECTORY (FINAL EPISODE)
-%% ------------------------------------------------------------------------
-fig2 = figure('Name', 'ECI Trajectory', 'Position', [100, 100, 1400, 900], 'Color', 'white');
-if has_ephemeris
-    plot_eci_diagnostics(ephemeris, const);
-else
-    axis off;
-    text(0.5, 0.5, 'ECI data not available (enable EphemerisLoggerCallback)', 'HorizontalAlignment', 'center');
-end
-save_figure_if_needed(fig2, 'eci_trajectory', export_dir, config);
-
-%% ------------------------------------------------------------------------
-%  FIGURE 3: STEPWISE DELTA-V ANALYSIS
-%% ------------------------------------------------------------------------
-fig3 = figure('Name', 'Delta-V Analysis', 'Position', [120, 120, 1400, 900], 'Color', 'white');
-if has_deltav
-    plot_delta_v_diagnostics(step_dv, evader_cumulative, pursuer_cumulative, dt_seconds, t);
-else
-    axis off;
-    text(0.5, 0.5, 'Stepwise delta-v data not available', 'HorizontalAlignment', 'center');
-end
-save_figure_if_needed(fig3, 'delta_v_analysis', export_dir, config);
-
-%% ------------------------------------------------------------------------
-%  FIGURE 4: TRAINING-WIDE METRICS
-%% ------------------------------------------------------------------------
-fig4 = figure('Name', 'Mission Statistics', 'Position', [140, 140, 1200, 800], 'Color', 'white');
-plot_mission_statistics(rel_distance, rel_velocity, evader_cumulative, pursuer_cumulative, per_episode_dv, progress, stats, const);
-save_figure_if_needed(fig4, 'mission_statistics', export_dir, config);
 
 if config.verbose
-    fprintf('\nAnalysis complete.\n');
+    fprintf('\nAnalysis complete (%d case(s)).\n', num_cases);
     if config.save_figures
-        fprintf('Figures saved to: %s\n', export_dir);
+        fprintf('Figures saved to: %s\n', export_root);
     end
 end
 
 %% ========================================================================
 %  HELPER FUNCTIONS
 % ========================================================================
+function generate_case_figures(case_data, const, config)
+    trajectory = case_data.trajectory;
+    step_dv = case_data.step_dv;
+    ephemeris = case_data.ephemeris;
+    per_episode_dv = case_data.per_episode_dv;
+    progress = case_data.progress;
+    stats = case_data.stats;
+
+    if ~isstruct(progress)
+        progress = struct();
+    end
+    if ~isstruct(stats)
+        stats = struct();
+    end
+
+    mission_outcome_str = upper(char(string(case_data.mission_outcome)));
+    file_prefix = sanitize_label(case_data.file_prefix);
+    export_dir = case_data.export_dir;
+
+    traj_x = [];
+    traj_y = [];
+    traj_z = [];
+    traj_vx = [];
+    traj_vy = [];
+    traj_vz = [];
+
+    has_trajectory = isstruct(trajectory) && all(isfield(trajectory, {'x', 'y', 'z'})) && ...
+        ~isempty(trajectory.x);
+
+    rel_distance = [];
+    rel_velocity = [];
+    time_axis = [];
+
+    if has_trajectory
+        traj_x = ensure_vector(trajectory.x);
+        traj_y = ensure_vector(get_field_or_default(trajectory, 'y', zeros(size(traj_x))));
+        traj_z = ensure_vector(get_field_or_default(trajectory, 'z', zeros(size(traj_x))));
+        time_axis = ensure_vector(get_field_or_default(trajectory, 'times', (0:numel(traj_x)-1)'));
+        traj_vx = ensure_vector(get_field_or_default(trajectory, 'vx', zeros(size(traj_x))));
+        traj_vy = ensure_vector(get_field_or_default(trajectory, 'vy', zeros(size(traj_x))));
+        traj_vz = ensure_vector(get_field_or_default(trajectory, 'vz', zeros(size(traj_x))));
+        rel_distance = ensure_vector(get_field_or_default(trajectory, 'distances', sqrt(traj_x.^2 + traj_y.^2 + traj_z.^2)));
+        rel_velocity = sqrt(traj_vx.^2 + traj_vy.^2 + traj_vz.^2);
+    end
+
+    dt_seconds = [];
+    if numel(time_axis) > 1
+        dt_seconds = median(diff(time_axis));
+    end
+
+    has_deltav = isstruct(step_dv) && isfield(step_dv, 'evader_magnitude') && ~isempty(step_dv.evader_magnitude);
+    if has_deltav
+        evader_cumulative = cumsum(step_dv.evader_magnitude);
+        if isfield(step_dv, 'pursuer_magnitude') && ~isempty(step_dv.pursuer_magnitude)
+            pursuer_cumulative = cumsum(step_dv.pursuer_magnitude);
+        else
+            pursuer_cumulative = [];
+        end
+    else
+        evader_cumulative = [];
+        pursuer_cumulative = [];
+    end
+
+    has_ephemeris = isstruct(ephemeris) && ~isempty(ephemeris) && ...
+        all(isfield(ephemeris, {'t', 'evader', 'pursuer'}));
+    if has_ephemeris
+        has_ephemeris = ~isempty(ephemeris.evader) && ~isempty(ephemeris.pursuer);
+    end
+
+    if ~isempty(per_episode_dv)
+        per_episode_dv = per_episode_dv(~isnan(per_episode_dv));
+    end
+
+    t = time_axis;
+    if isempty(t)
+        t = (0:numel(rel_distance)-1)';
+    end
+
+    fig1 = figure('Name', sprintf('%s - Relative Trajectory (LVLH)', case_data.label), ...
+        'Position', [80, 80, 1400, 900], 'Color', 'white');
+
+    if has_trajectory
+        subplot(2, 3, [1, 4]);
+        hold on; grid on; box on;
+        c = linspace(0, 1, numel(traj_x));
+        surface([traj_x; nan], [traj_y; nan], [traj_z; nan], [c'; nan], ...
+            'EdgeColor', 'interp', 'FaceColor', 'none', 'LineWidth', 2.5);
+        plot3(0, 0, 0, 'o', 'MarkerSize', 10, 'MarkerFaceColor', [0 0.8 0], 'MarkerEdgeColor', 'k');
+        plot3(traj_x(1), traj_y(1), traj_z(1), '^', 'MarkerSize', 9, 'MarkerFaceColor', [0.8 0 0], 'MarkerEdgeColor', 'k');
+        plot3(traj_x(end), traj_y(end), traj_z(end), 's', 'MarkerSize', 9, 'MarkerFaceColor', [0.2 0.2 0.2], 'MarkerEdgeColor', 'k');
+        draw_zone_spheres(const);
+        xlabel('X [m]'); ylabel('Y [m]'); zlabel('Z [m]');
+        title(sprintf('%s - Outcome: %s', case_data.label, mission_outcome_str));
+        axis equal; view(45, 25);
+        cb = colorbar;
+        ylabel(cb, 'Step progression');
+    else
+        subplot(2, 3, [1, 4]);
+        axis off;
+        text(0.5, 0.5, 'Relative position data not available', 'HorizontalAlignment', 'center');
+    end
+
+    subplot(2, 3, 2);
+    if ~isempty(rel_distance)
+        hold on; grid on; box on;
+        plot(t, rel_distance, 'b-', 'LineWidth', 2);
+        yline(const.CAPTURE_RADIUS, 'r--', 'LineWidth', 1.2);
+        yline(const.EVASION_RADIUS, 'g--', 'LineWidth', 1.2);
+        xlabel('Time [s]'); ylabel('Distance [m]');
+        title('Relative Distance Evolution');
+    else
+        axis off; text(0.5, 0.5, 'Distance series unavailable', 'HorizontalAlignment', 'center');
+    end
+
+    subplot(2, 3, 3);
+    if ~isempty(rel_velocity)
+        hold on; grid on; box on;
+        plot(t, traj_vx, 'r-');
+        plot(t, traj_vy, 'g-');
+        plot(t, traj_vz, 'b-');
+        plot(t, rel_velocity, 'k--', 'LineWidth', 2);
+        xlabel('Time [s]'); ylabel('Velocity [m/s]');
+        title('Relative Velocity Components');
+        legend('V_x', 'V_y', 'V_z', '|V|', 'Location', 'best');
+    else
+        axis off; text(0.5, 0.5, 'Velocity data not available', 'HorizontalAlignment', 'center');
+    end
+
+    subplot(2, 3, 5);
+    if ~isempty(rel_distance)
+        hold on; grid on; box on;
+        scatter(traj_x, traj_vx, 20, linspace(0, 1, numel(traj_x)), 'filled');
+        xlabel('Position X [m]'); ylabel('Velocity V_x [m/s]');
+        title('Phase Space (X vs V_x)');
+        colorbar('Label', 'Step progression');
+    else
+        axis off; text(0.5, 0.5, 'Phase space unavailable', 'HorizontalAlignment', 'center');
+    end
+
+    subplot(2, 3, 6);
+    if ~isempty(rel_distance)
+        hold on; grid on; box on;
+        distance_rate = [0; diff(rel_distance)];
+        plot(t, distance_rate, 'b-', 'LineWidth', 1.5);
+        yline(0, 'k--');
+        xlabel('Time [s]'); ylabel('Delta Distance [m]');
+        title('Closing / Opening Rate');
+    else
+        axis off;
+    end
+
+    save_figure_if_needed(fig1, sprintf('%s_relative_trajectory', file_prefix), export_dir, config);
+
+    fig2 = figure('Name', sprintf('%s - ECI Trajectory', case_data.label), ...
+        'Position', [100, 100, 1400, 900], 'Color', 'white');
+    if has_ephemeris
+        plot_eci_diagnostics(ephemeris, const);
+    else
+        axis off;
+        text(0.5, 0.5, 'ECI data not available (enable EphemerisLoggerCallback)', 'HorizontalAlignment', 'center');
+    end
+    save_figure_if_needed(fig2, sprintf('%s_eci_trajectory', file_prefix), export_dir, config);
+
+    fig3 = figure('Name', sprintf('%s - Delta-V Analysis', case_data.label), ...
+        'Position', [120, 120, 1400, 900], 'Color', 'white');
+    if has_deltav
+        plot_delta_v_diagnostics(step_dv, evader_cumulative, pursuer_cumulative, dt_seconds, t);
+    else
+        axis off;
+        text(0.5, 0.5, 'Stepwise delta-v data not available', 'HorizontalAlignment', 'center');
+    end
+    save_figure_if_needed(fig3, sprintf('%s_delta_v_analysis', file_prefix), export_dir, config);
+
+    fig4 = figure('Name', sprintf('%s - Mission Statistics', case_data.label), ...
+        'Position', [140, 140, 1200, 800], 'Color', 'white');
+    plot_mission_statistics(rel_distance, rel_velocity, evader_cumulative, pursuer_cumulative, per_episode_dv, progress, stats, const);
+    save_figure_if_needed(fig4, sprintf('%s_mission_statistics', file_prefix), export_dir, config);
+end
+
+function label = sanitize_label(input)
+    str = string(input);
+    label = regexprep(str, '[^A-Za-z0-9_-]', '_');
+    label = char(label);
+end
+
+function entries = normalize_test_summary(table_data)
+    entries = struct([]);
+    if ~istable(table_data)
+        return;
+    end
+    entries = table2struct(table_data);
+    for idx = 1:numel(entries)
+        if isfield(entries(idx), 'test_run')
+            entries(idx).test_run = coerce_to_double(entries(idx).test_run);
+        end
+        if isfield(entries(idx), 'success')
+            entries(idx).success = parse_boolean(entries(idx).success);
+        end
+        numeric_fields = {'evader_delta_v', 'evader_total_delta_v', 'evader_total_delta_v_ms', ...
+            'total_evader_delta_v', 'total_evader_delta_v_ms', 'final_distance', 'final_distance_m'};
+        for fidx = 1:numel(numeric_fields)
+            field = numeric_fields{fidx};
+            if isfield(entries(idx), field)
+                entries(idx).(field) = coerce_to_double(entries(idx).(field));
+            end
+        end
+    end
+end
+
+function id = parse_test_identifier(filename)
+    tokens = regexp(filename, '^test_(\d+)_', 'tokens', 'once');
+    if isempty(tokens)
+        id = NaN;
+    else
+        id = str2double(tokens{1});
+    end
+end
+
+function summary = find_summary_for_test(entries, test_id)
+    summary = struct();
+    if isempty(entries)
+        return;
+    end
+    target_idx = test_id - 1;
+    for idx = 1:numel(entries)
+        if ~isfield(entries(idx), 'test_run')
+            continue;
+        end
+        run_idx = coerce_to_double(entries(idx).test_run);
+        if isnan(run_idx)
+            continue;
+        end
+        if run_idx == target_idx
+            summary = entries(idx);
+            return;
+        end
+    end
+end
+
+function value = extract_field(data, names)
+    value = [];
+    if ~isstruct(data)
+        return;
+    end
+    names = cellstr(names);
+    for idx = 1:numel(names)
+        name = names{idx};
+        if isfield(data, name) && ~isempty(data.(name))
+            value = data.(name);
+            return;
+        end
+    end
+end
+
+function tf = parse_boolean(value)
+    if isempty(value)
+        tf = false;
+        return;
+    end
+    if islogical(value)
+        tf = logical(value(1));
+        return;
+    end
+    if isnumeric(value)
+        tf = value(1) ~= 0;
+        return;
+    end
+    str = lower(strtrim(string(value(1))));
+    tf = any(str == "true" | str == "1" | str == "yes" | str == "success");
+end
+
+function val = coerce_to_double(value)
+    if isempty(value)
+        val = NaN;
+        return;
+    end
+    if isnumeric(value)
+        val = double(value(1));
+        return;
+    end
+    str = string(value(1));
+    val = str2double(str);
+end
+
+function out = get_field_or_default(data, name, default_value)
+    if isstruct(data) && isfield(data, name) && ~isempty(data.(name))
+        out = data.(name);
+    else
+        out = default_value;
+    end
+end
+
 function [run_info, config] = resolve_run_directory(config)
     arguments
         config struct
