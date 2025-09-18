@@ -398,7 +398,14 @@ def visualize_trajectory(states: np.ndarray,
     # Delta-v 화살표가 축 스케일 대비 지나치게 작아지지 않도록 자동 길이 설정
     if arrow_length is None:
         scale_reference = max(max_range, 1.0)
-        arrow_length = 0.1 * scale_reference
+        arrow_length = 0.05 * scale_reference
+
+        # 궤적 스텝 크기를 참고하여 화살표가 과도하게 길어지지 않도록 보정
+        if states.shape[0] > 1:
+            step_norms = np.linalg.norm(np.diff(states[:, :3], axis=0), axis=1)
+            if np.any(step_norms > 0):
+                typical_step = np.percentile(step_norms[step_norms > 0], 75)
+                arrow_length = min(arrow_length, typical_step * 0.8)
 
     #if max_range == 0:
     #    max_range = 1.0
