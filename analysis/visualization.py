@@ -108,7 +108,7 @@ def plot_training_progress(success_rates: List[float],
         plt.ylim(0, 1)
         plt.legend()
         plt.tight_layout()
-        plt.savefig(f'{save_dir}/success_rate_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
+        plt.savefig(f'{save_dir}/success_rate.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
         
         # 성공률 데이터 저장
@@ -134,7 +134,7 @@ def plot_training_progress(success_rates: List[float],
                                                startangle=90)
             plt.title(f'Outcome Distribution (Episode {episode_count})')
             plt.tight_layout()
-            plt.savefig(f'{save_dir}/outcome_distribution_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
+            plt.savefig(f'{save_dir}/outcome_distribution.png', dpi=PLOT_PARAMS['dpi'])
             plt.close()
             
             # 결과 분포 데이터 저장
@@ -176,7 +176,7 @@ def plot_training_progress(success_rates: List[float],
         plt.legend(loc='best')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(f'{save_dir}/zero_sum_rewards_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
+        plt.savefig(f'{save_dir}/zero_sum_rewards.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
         
         # 보상 데이터 저장
@@ -205,7 +205,7 @@ def plot_training_progress(success_rates: List[float],
         plt.grid(True, alpha=0.3)
         plt.ylim(0, 1)
         plt.tight_layout()
-        plt.savefig(f'{save_dir}/nash_metric_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
+        plt.savefig(f'{save_dir}/nash_metric.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
         
         # Nash 메트릭 데이터 저장
@@ -227,7 +227,7 @@ def plot_training_progress(success_rates: List[float],
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(f'{save_dir}/buffer_time_stats_ep{episode_count}.png', dpi=PLOT_PARAMS['dpi'])
+        plt.savefig(f'{save_dir}/buffer_time_stats.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
     
     # 모든 학습 데이터를 하나의 JSON 파일로 저장
@@ -272,9 +272,6 @@ def plot_delta_v_per_episode(delta_v_values: List[float], save_dir: str, window:
 
     latest_path = os.path.join(save_dir, 'evader_delta_v_trend.png')
     plt.savefig(latest_path, dpi=PLOT_PARAMS['dpi'])
-
-    snapshot_path = os.path.join(save_dir, f'evader_delta_v_ep{len(delta_v_values)}.png')
-    plt.savefig(snapshot_path, dpi=PLOT_PARAMS['dpi'])
     plt.close()
 
     data = {
