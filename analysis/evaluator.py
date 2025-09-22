@@ -5,6 +5,7 @@
 import numpy as np
 import os
 import datetime
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from stable_baselines3 import SAC
 from analysis.visualization import (
@@ -17,6 +18,7 @@ from analysis.visualization import (
 )
 from analysis.metrics import calculate_performance_metrics, analyze_trajectory_quality
 from orbital_mechanics.coordinate_transforms import lvlh_to_eci
+from utils.matlab_templates import render_matlab_script
 
 
 class ModelEvaluator:
@@ -80,6 +82,7 @@ class ModelEvaluator:
         if save_results:
             results_dir = f"./test_results/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
             os.makedirs(results_dir, exist_ok=True)
+            self._write_matlab_evaluation_script(results_dir)
         else:
             results_dir = None
         
@@ -354,7 +357,7 @@ class ModelEvaluator:
         plot_delta_v_components(
             actions_e, actions_p, f"{save_dir}/test_{scenario_id}"
         )
-    
+
     def _save_evaluation_results(self, comprehensive_results: Dict,
                                results: List[Dict],
                                trajectories: List[Tuple],
@@ -379,6 +382,25 @@ class ModelEvaluator:
         create_summary_dashboard(training_stats, results, save_dir)
         
         print(f"평가 결과 저장 완료: {save_dir}")
+
+    def _write_matlab_evaluation_script(self, results_dir: str) -> None:
+        """평가 결과 폴더에 MATLAB 분석 스크립트를 생성."""
+        resolved = Path(results_dir).resolve()
+        batch_name = resolved.name
+        generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        destination = resolved / "Analysis_evaluation.m"
+
+        try:
+            render_matlab_script(
+                "analysis_evaluation_template.m",
+                destination,
+                {
+                    "RUN_NAME": batch_name,
+                    "GENERATED_AT": generated_at,
+                },
+            )
+        except FileNotFoundError as exc:
+            print(f"[경고] MATLAB 평가 분석 스크립트 생성 실패: {exc}")
     
     def _save_text_summary(self, results: Dict, save_dir: str):
         """텍스트 요약 저장"""

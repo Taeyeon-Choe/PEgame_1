@@ -4,6 +4,8 @@ SAC 모델 트레이너 클래스
 
 import os
 import datetime
+from pathlib import Path
+
 import torch
 import numpy as np
 from stable_baselines3 import SAC
@@ -23,6 +25,7 @@ from training.callbacks import (
     DetailedAnalysisCallback,
 )
 from utils.system_info import patch_sb3_system_info
+from utils.matlab_templates import render_matlab_script
 
 # 시스템 정보에 추가 패키지 버전 기록
 patch_sb3_system_info()
@@ -83,8 +86,28 @@ class SACTrainer:
         for subdir in subdirs:
             os.makedirs(f"{log_dir}/{subdir}", exist_ok=True)
         
+        self._write_matlab_training_script(log_dir)
+
         print(f"로그 디렉토리 생성 완료: {log_dir}")
         return log_dir
+
+    def _write_matlab_training_script(self, log_dir: str) -> None:
+        """학습 로그 폴더에 MATLAB 분석 스크립트를 생성."""
+        run_name = Path(log_dir).name
+        generated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        destination = Path(log_dir) / "Analysis_training.m"
+
+        try:
+            render_matlab_script(
+                "analysis_training_template.m",
+                destination,
+                {
+                    "RUN_NAME": run_name,
+                    "GENERATED_AT": generated_at,
+                },
+            )
+        except FileNotFoundError as exc:
+            print(f"[경고] MATLAB 학습 분석 스크립트 생성 실패: {exc}")
 
     def _make_eval_env(self) -> DummyVecEnv:
         """평가용 DummyVecEnv 생성"""

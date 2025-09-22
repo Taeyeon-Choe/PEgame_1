@@ -18,7 +18,9 @@ set(0, 'DefaultAxesZGrid', 'on');
 %% ------------------------------------------------------------------------
 %  CONFIGURATION
 %% ------------------------------------------------------------------------
-config.logs_root = './logs';       % Root directory for training logs
+path_ctx = resolve_analysis_paths();
+
+config.logs_root = path_ctx.logs_root;       % Root directory for training logs
 config.target_run = '';            % Specify run folder or leave empty for latest
 config.experiment_filter = '*';    % Wildcard filter (e.g., 'interactive_training*')
 config.save_figures = false;       % Save figures automatically
@@ -28,9 +30,21 @@ config.verbose = true;             % Display progress information
 
 % Additional switches for test-result batches
 config.analysis_mode = 'training';     % 'training' or 'test'
-config.test_results_root = './test_results';
+config.test_results_root = path_ctx.test_results_root;
 config.target_test_run = '';
 config.test_case_filter = [];          % e.g., [1 3 5] to inspect selected tests
+
+if exist('analysis_config_override', 'var') && isstruct(analysis_config_override)
+    override_struct = analysis_config_override;
+    clear analysis_config_override;
+    config = apply_config_override(config, override_struct);
+    if isfield(override_struct, 'logs_root')
+        path_ctx.logs_root = override_struct.logs_root;
+    end
+    if isfield(override_struct, 'test_results_root')
+        path_ctx.test_results_root = override_struct.test_results_root;
+    end
+end
 
 %% ------------------------------------------------------------------------
 %  DATA SELECTION AND PREPARATION
@@ -45,8 +59,9 @@ switch mode
         [run_info, config] = resolve_run_directory(config);
         plots_dir = fullfile(run_info.path, 'plots');
         analysis_dir = fullfile(run_info.path, 'analysis');
+        run_label = derive_run_label(run_info);
         if isempty(config.output_dir)
-            export_root = fullfile(run_info.path, 'matlab_analysis');
+            export_root = fullfile(config.logs_root, 'matlab_analysis_training', run_label);
         else
             export_root = config.output_dir;
         end
@@ -159,8 +174,9 @@ switch mode
 
         [run_info, ~] = resolve_run_directory(test_config);
 
+        run_label = derive_run_label(run_info);
         if isempty(config.output_dir)
-            export_root = fullfile(run_info.path, 'matlab_analysis');
+            export_root = fullfile(config.test_results_root, 'matlab_analysis_evaluation', run_label);
         else
             export_root = config.output_dir;
         end
@@ -380,6 +396,79 @@ end
 %% ========================================================================
 %  HELPER FUNCTIONS
 % ========================================================================
+function config = apply_config_override(config, override)
+    fields = fieldnames(override);
+    for idx = 1:numel(fields)
+        field = fields{idx};
+        config.(field) = override.(field);
+    end
+end
+
+function ctx = resolve_analysis_paths()
+    script_dir = get_script_directory();
+    project_root = find_project_root(script_dir);
+
+    logs_root = fullfile(project_root, 'logs');
+    test_root = fullfile(project_root, 'test_results');
+
+    ctx = struct( ...
+        'script_dir', script_dir, ...
+        'project_root', project_root, ...
+        'logs_root', logs_root, ...
+        'test_results_root', test_root);
+end
+
+function script_dir = get_script_directory()
+    script_dir = '';
+
+    stack = dbstack('-completenames');
+    for idx = numel(stack):-1:1
+        candidate = stack(idx).file;
+        if ~isempty(candidate) && exist(candidate, 'file')
+            script_dir = fileparts(candidate);
+            if ~isempty(script_dir)
+                return;
+            end
+        end
+    end
+
+    mf = mfilename('fullpath');
+    if ~isempty(mf)
+        script_dir = fileparts(mf);
+    end
+
+    if isempty(script_dir)
+        script_dir = pwd;
+    end
+end
+
+function project_root = find_project_root(start_dir)
+    if nargin == 0 || isempty(start_dir)
+        start_dir = pwd;
+    end
+
+    current = start_dir;
+    last_valid = start_dir;
+
+    while true
+        logs_exists = exist(fullfile(current, 'logs'), 'dir');
+        tests_exists = exist(fullfile(current, 'test_results'), 'dir');
+        if logs_exists || tests_exists
+            project_root = current;
+            return;
+        end
+
+        parent = fileparts(current);
+        if isempty(parent) || strcmp(parent, current)
+            break;
+        end
+        last_valid = current;
+        current = parent;
+    end
+
+    project_root = last_valid;
+end
+
 function generate_case_figures(case_data, const, config)
     trajectory = case_data.trajectory;
     step_dv = case_data.step_dv;
@@ -670,6 +759,25 @@ function out = get_field_or_default(data, name, default_value)
     else
         out = default_value;
     end
+end
+
+function label = derive_run_label(run_info)
+    label = 'run';
+    if ~isstruct(run_info)
+        return;
+    end
+    if ~isfield(run_info, 'name') || isempty(run_info.name)
+        return;
+    end
+
+    raw_name = string(run_info.name);
+    raw_name = raw_name(1);
+    [~, base_name, ~] = fileparts(raw_name);
+    if strlength(base_name) == 0
+        base_name = raw_name;
+    end
+
+    label = sanitize_label(base_name);
 end
 
 function [run_info, config] = resolve_run_directory(config)

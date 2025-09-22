@@ -54,6 +54,7 @@ def tvlqr_gains(A_seq, B_seq, Q_seq, R_seq, QN):
         raise ValueError("QN must be length-n diag or (n, n) matrix")
 
     K_list = [np.zeros((m, n), dtype=float) for _ in range(horizon)]
+    # P stores P_{k+1} during backward iteration
     P = QN.copy()
 
     for k in reversed(range(horizon)):
@@ -63,14 +64,18 @@ def tvlqr_gains(A_seq, B_seq, Q_seq, R_seq, QN):
         Rk = R_mats[k]
 
         S = Rk + B.T @ P @ B
+        # 수치 안정화를 위한 대칭화 및 최소 리지 추가
+        S = 0.5 * (S + S.T)
+        S += 1e-10 * np.eye(m)
         try:
             S_inv = np.linalg.inv(S)
         except np.linalg.LinAlgError:
             S_inv = np.linalg.pinv(S)
 
+        # 표준 이산 시간 리카티 갱신식
         K = S_inv @ (B.T @ P @ A)
         K_list[k] = K
-        P = Qk + A.T @ (P - P @ B @ K)
+        P = Qk + A.T @ P @ A - A.T @ P @ B @ K
 
     return np.stack(K_list, axis=0)
 
