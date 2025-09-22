@@ -287,6 +287,21 @@ def interactive_mode():
             config.training.total_timesteps = timesteps
             config.environment.use_gastm = use_gastm
 
+            # 추격자 정책 선택
+            policy_default = config.environment.pursuer_policy
+            policy_input = input(
+                f"추격자 정책 (heuristic/tvlqr, 기본값: {policy_default}): "
+            ).strip().lower()
+            if policy_input in ("heuristic", "tvlqr"):
+                config.environment.pursuer_policy = policy_input
+
+            if config.environment.pursuer_policy == "tvlqr":
+                horizon_input = input(
+                    f"TVLQR horizon (기본값: {config.environment.lqr_horizon}): "
+                ).strip()
+                if horizon_input:
+                    config.environment.lqr_horizon = int(horizon_input)
+
             # dt 및 k 설정
             dt_value = input(
                 f"시간 간격 dt (기본값: {config.environment.dt} s): "
@@ -319,7 +334,41 @@ def interactive_mode():
                 delta_v_pmax = input(f"추격자 최대 Delta-V (기본값: {config.environment.delta_v_pmax} m/s): ").strip()
                 if delta_v_pmax:
                     config.environment.delta_v_pmax = float(delta_v_pmax)
-                
+
+                if config.environment.pursuer_policy == "tvlqr":
+                    lqr_q = input(
+                        "TVLQR Q 대각 (쉼표 구분, 기본값 유지 시 Enter): "
+                    ).strip()
+                    if lqr_q:
+                        try:
+                            config.environment.lqr_Q_diag = [
+                                float(x) for x in lqr_q.replace('[', '').replace(']', '').split(',')
+                            ]
+                        except ValueError:
+                            print("Q 대각 입력을 해석할 수 없어 기본값을 유지합니다.")
+
+                    lqr_qn = input(
+                        "TVLQR QN 대각 (쉼표 구분, 기본값 유지 시 Enter): "
+                    ).strip()
+                    if lqr_qn:
+                        try:
+                            config.environment.lqr_QN_diag = [
+                                float(x) for x in lqr_qn.replace('[', '').replace(']', '').split(',')
+                            ]
+                        except ValueError:
+                            print("QN 대각 입력을 해석할 수 없어 기본값을 유지합니다.")
+
+                    lqr_r = input(
+                        "TVLQR R 대각 (쉼표 구분, 기본값 유지 시 Enter): "
+                    ).strip()
+                    if lqr_r:
+                        try:
+                            config.environment.lqr_R_diag = [
+                                float(x) for x in lqr_r.replace('[', '').replace(']', '').split(',')
+                            ]
+                        except ValueError:
+                            print("R 대각 입력을 해석할 수 없어 기본값을 유지합니다.")
+
                 # 병렬 환경 수
                 n_envs = input(f"병렬 환경 수 (기본값: {config.training.n_envs}): ").strip()
                 if n_envs:
@@ -332,6 +381,12 @@ def interactive_mode():
             print(f"  - k: {config.environment.k}")
             print(f"  - c 파라미터: {config.environment.c}")
             print(f"  - 병렬 환경: {config.training.n_envs}")
+            print(f"  - 추격자 정책: {config.environment.pursuer_policy}")
+            if config.environment.pursuer_policy == "tvlqr":
+                print(f"    · horizon: {config.environment.lqr_horizon}")
+                print(f"    · Q diag: {config.environment.lqr_Q_diag}")
+                print(f"    · QN diag: {config.environment.lqr_QN_diag}")
+                print(f"    · R diag: {config.environment.lqr_R_diag}")
 
             confirm = input("\n이 설정으로 학습을 시작하시겠습니까? (y/n): ").strip().lower()
             if confirm == 'y':
@@ -355,6 +410,20 @@ def interactive_mode():
 
             config = get_config(experiment_name="interactive_evaluation")
             config.environment.use_gastm = use_gastm != 'n'
+
+            policy_default = config.environment.pursuer_policy
+            policy_input = input(
+                f"추격자 정책 (heuristic/tvlqr, 기본값: {policy_default}): "
+            ).strip().lower()
+            if policy_input in ("heuristic", "tvlqr"):
+                config.environment.pursuer_policy = policy_input
+
+            if config.environment.pursuer_policy == "tvlqr":
+                horizon_input = input(
+                    f"TVLQR horizon (기본값: {config.environment.lqr_horizon}): "
+                ).strip()
+                if horizon_input:
+                    config.environment.lqr_horizon = int(horizon_input)
 
             dt_value = input(
                 f"시간 간격 dt (기본값: {config.environment.dt} s): "
@@ -381,12 +450,46 @@ def interactive_mode():
             if delta_v_pmax:
                 config.environment.delta_v_pmax = float(delta_v_pmax)
 
+            if config.environment.pursuer_policy == "tvlqr":
+                lqr_q = input("TVLQR Q 대각 (쉼표 구분, 기본값 유지 시 Enter): ").strip()
+                if lqr_q:
+                    try:
+                        config.environment.lqr_Q_diag = [
+                            float(x) for x in lqr_q.replace('[', '').replace(']', '').split(',')
+                        ]
+                    except ValueError:
+                        print("Q 대각 입력을 해석할 수 없어 기본값을 유지합니다.")
+
+                lqr_qn = input("TVLQR QN 대각 (쉼표 구분, 기본값 유지 시 Enter): ").strip()
+                if lqr_qn:
+                    try:
+                        config.environment.lqr_QN_diag = [
+                            float(x) for x in lqr_qn.replace('[', '').replace(']', '').split(',')
+                        ]
+                    except ValueError:
+                        print("QN 대각 입력을 해석할 수 없어 기본값을 유지합니다.")
+
+                lqr_r = input("TVLQR R 대각 (쉼표 구분, 기본값 유지 시 Enter): ").strip()
+                if lqr_r:
+                    try:
+                        config.environment.lqr_R_diag = [
+                            float(x) for x in lqr_r.replace('[', '').replace(']', '').split(',')
+                        ]
+                    except ValueError:
+                        print("R 대각 입력을 해석할 수 없어 기본값을 유지합니다.")
+
             print("\n평가 설정:")
             print(f"  GA-STM 사용: {config.environment.use_gastm}")
             print(f"  dt: {config.environment.dt} s")
             print(f"  k: {config.environment.k}")
             print(f"  회피자 최대 Delta-V: {config.environment.delta_v_emax} m/s")
             print(f"  추격자 최대 Delta-V: {config.environment.delta_v_pmax} m/s")
+            print(f"  추격자 정책: {config.environment.pursuer_policy}")
+            if config.environment.pursuer_policy == "tvlqr":
+                print(f"    · horizon: {config.environment.lqr_horizon}")
+                print(f"    · Q diag: {config.environment.lqr_Q_diag}")
+                print(f"    · QN diag: {config.environment.lqr_QN_diag}")
+                print(f"    · R diag: {config.environment.lqr_R_diag}")
 
             evaluate_model(model_path, config, n_tests)
             
