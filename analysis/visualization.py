@@ -983,7 +983,7 @@ def _plot_eci_trajectories_plotly(times: np.ndarray,
                 colorbar=dict(title="Time (min)", x=1.05),
                 cmin=time_values_min.min(),
                 cmax=time_values_min.max(),
-                symbol="triangle"  # 삼각형 모양 지정
+                symbol="diamond"  #  모양 지정
             ),
             name="Pursuer",
             customdata=np.column_stack((pursuer_states_km[:, 0], pursuer_states_km[:, 1], pursuer_states_km[:, 2], time_values_sec)),

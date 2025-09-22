@@ -10,6 +10,7 @@ from orbital_mechanics.ga_stm_propagator import GASTMPropagator
 from orbital_mechanics.orbit import ChiefOrbit
 from scipy.integrate import solve_ivp
 from orbital_mechanics.dynamics import relative_dynamics_evader_centered
+from controllers.tvlqr import tvlqr_action
 
 
 class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
@@ -53,6 +54,45 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         else:
             # 기존의 비선형 동역학 수치 적분 사용
             super()._simulate_relative_motion()
+
+    def compute_interception_strategy(self, state: np.ndarray) -> np.ndarray:
+        policy = getattr(self.config, "pursuer_policy", "heuristic")
+        if policy != "tvlqr" or not (self.use_gastm and self.gastm_propagator):
+            return super().compute_interception_strategy(state)
+
+        H = max(1, int(getattr(self.config, "lqr_horizon", 10)))
+        try:
+            A_seq, B_seq = self.gastm_propagator.get_impulsive_AB_sequence(
+                horizon=H,
+                dt=self.dt,
+                current_time=self.t,
+            )
+        except Exception as exc:
+            if self.debug_mode:
+                print(f"[TVLQR] Fallback to heuristic due to GA-STM error: {exc}")
+            return super().compute_interception_strategy(state)
+
+        Q_diag = np.asarray(getattr(self.config, "lqr_Q_diag", [1, 1, 1, 0.05, 0.05, 0.05]), dtype=float)
+        QN_diag = np.asarray(getattr(self.config, "lqr_QN_diag", [5, 5, 5, 0.1, 0.1, 0.1]), dtype=float)
+        R_diag = np.asarray(getattr(self.config, "lqr_R_diag", [1e-2, 1e-2, 1e-2]), dtype=float)
+
+        try:
+            dv_cmd = tvlqr_action(
+                x=np.asarray(state, dtype=float).reshape(-1),
+                A_seq=A_seq,
+                B_seq=B_seq,
+                Q_seq=Q_diag,
+                R_seq=R_diag,
+                QN=QN_diag,
+                dv_max=self.delta_v_pmax,
+            )
+        except Exception as exc:
+            if self.debug_mode:
+                print(f"[TVLQR] Gain computation failed, fallback to heuristic: {exc}")
+            return super().compute_interception_strategy(state)
+
+        dv_cmd = np.nan_to_num(dv_cmd, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)
+        return dv_cmd
 
     def _apply_evader_delta_v(self, delta_v_e: np.ndarray):
         """

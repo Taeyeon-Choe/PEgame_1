@@ -5,7 +5,7 @@
 import os
 import torch
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from utils.constants import (
     ENV_PARAMS,
     BUFFER_PARAMS,
@@ -47,6 +47,17 @@ class EnvironmentConfig:
     max_initial_separation: float = ENV_PARAMS["max_initial_separation"]
     use_rk4: bool = ENV_PARAMS["use_rk4"]
     use_gastm: bool = ENV_PARAMS["use_gastm"]
+    pursuer_policy: str = ENV_PARAMS["pursuer_policy"]
+    lqr_horizon: int = ENV_PARAMS["lqr_horizon"]
+    lqr_Q_diag: List[float] = field(
+        default_factory=lambda: list(ENV_PARAMS["lqr_Q_diag"])
+    )
+    lqr_QN_diag: List[float] = field(
+        default_factory=lambda: list(ENV_PARAMS["lqr_QN_diag"])
+    )
+    lqr_R_diag: List[float] = field(
+        default_factory=lambda: list(ENV_PARAMS["lqr_R_diag"])
+    )
 
     # 버퍼 설정
     capture_buffer_steps: int = BUFFER_PARAMS["capture_buffer_steps"]

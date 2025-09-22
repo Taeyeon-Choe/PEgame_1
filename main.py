@@ -476,6 +476,17 @@ def main():
                        help='회피자 최대 Delta-V (m/s)')
     parser.add_argument('--delta-v-pmax', type=float, default=None,
                        help='추격자 최대 Delta-V (m/s)')
+    parser.add_argument('--pursuer-policy', type=str, default=None,
+                       choices=['heuristic', 'tvlqr'],
+                       help='추격자 정책 선택 (heuristic | tvlqr)')
+    parser.add_argument('--lqr-horizon', type=int, default=None,
+                       help='TVLQR 유한 구간 길이')
+    parser.add_argument('--lqr-q', type=float, nargs=6, default=None,
+                       help='TVLQR Q 대각 원소 6개 [x y z vx vy vz]')
+    parser.add_argument('--lqr-qn', type=float, nargs=6, default=None,
+                       help='TVLQR 종단 Q_N 대각 6개')
+    parser.add_argument('--lqr-r', type=float, nargs=3, default=None,
+                       help='TVLQR R 대각 3개')
 
     args = parser.parse_args()
     
@@ -537,6 +548,26 @@ def main():
             custom_config['environment'] = custom_config.get('environment', {})
             custom_config['environment']['delta_v_pmax'] = args.delta_v_pmax
 
+        if args.pursuer_policy is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['pursuer_policy'] = args.pursuer_policy
+
+        if args.lqr_horizon is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['lqr_horizon'] = args.lqr_horizon
+
+        if args.lqr_q is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['lqr_Q_diag'] = list(args.lqr_q)
+
+        if args.lqr_qn is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['lqr_QN_diag'] = list(args.lqr_qn)
+
+        if args.lqr_r is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['lqr_R_diag'] = list(args.lqr_r)
+
         config = get_config(
             experiment_name=args.experiment_name or f"{args.mode}_experiment",
             debug_mode=args.debug,
@@ -564,7 +595,8 @@ def main():
     print(f"  최대 Delta-V 예산: {config.environment.max_delta_v_budget} m/s")
     print(f"  회피자 최대 Delta-V: {config.environment.delta_v_emax} m/s")
     print(f"  추격자 최대 Delta-V: {config.environment.delta_v_pmax} m/s")
-    
+    print(f"  추격자 정책: {config.environment.pursuer_policy}")
+
     try:
         # 모드별 실행
         if args.mode == 'train_standard':

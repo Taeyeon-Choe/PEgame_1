@@ -46,6 +46,11 @@ ENV_PARAMS = {
     "max_initial_separation": 3e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
     "use_gastm": True,
+    "pursuer_policy": "heuristic",  # "heuristic" or "tvlqr"
+    "lqr_horizon": 10,
+    "lqr_Q_diag": [1.0, 1.0, 1.0, 0.05, 0.05, 0.05],
+    "lqr_QN_diag": [5.0, 5.0, 5.0, 0.1, 0.1, 0.1],
+    "lqr_R_diag": [1e-2, 1e-2, 1e-2],
 }
 
 # 버퍼 시간 설정
