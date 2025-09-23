@@ -184,12 +184,18 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
             else:
                 print("    회피자 총 delta-v: 데이터 없음")
 
-            evader_orbit = res.get('initial_evader_orbital_elements')
-            pursuer_orbit = res.get('initial_pursuer_orbital_elements')
-            if evader_orbit or pursuer_orbit:
-                print("    초기 궤도 요소:")
-                print_orbital_elements("Evader", evader_orbit)
-                print_orbital_elements("Pursuer", pursuer_orbit)
+            evader_orbit = (
+                res.get('initial_evader_orbital_elements')
+                or res.get('evader_elements')
+            )
+            pursuer_orbit = (
+                res.get('initial_pursuer_orbital_elements')
+                or res.get('pursuer_elements')
+            )
+
+            print("    초기 궤도 요소:")
+            print_orbital_elements("Evader", evader_orbit)
+            print_orbital_elements("Pursuer", pursuer_orbit)
 
     # 결과 요약 출력
     summary = results['summary']

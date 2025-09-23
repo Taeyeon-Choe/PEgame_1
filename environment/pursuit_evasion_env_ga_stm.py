@@ -177,13 +177,38 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         
         if "outcome" in termination_info:
             info["outcome"] = termination_info["outcome"]
+
         # 콜백 호환을 위한 거리 키 보강
         if 'initial_relative_distance' not in info and self.initial_relative_distance is not None:
             info['initial_relative_distance'] = float(self.initial_relative_distance)
         final_dist = float(np.linalg.norm(self.state[:3]))
         info.setdefault('final_relative_distance', final_dist)
         info.setdefault('final_distance', final_dist)
-    
+
+        # 에피소드 종료 시 추가 정보(초기 궤도 요소 등) 포함 - base env와 동일한 포맷
+        done = terminated or truncated
+        if done:
+            # 최종 상대거리 저장
+            self.final_relative_distance = final_dist
+
+            # 종료 정보 업데이트 (초기/최종 궤도 및 보상 요약 포함)
+            info.update({
+                "outcome": termination_info.get("outcome", "unknown"),
+                "termination_details": termination_info,
+                # 궤도 정보
+                "initial_evader_orbital_elements": self.initial_evader_orbital_elements,
+                "initial_pursuer_orbital_elements": self.initial_pursuer_orbital_elements,
+                "initial_relative_distance": self.initial_relative_distance,
+                "final_relative_distance": self.final_relative_distance,
+                # 보상 정보 (Stable-Baselines 호환 키 포함)
+                "evader_reward": evader_reward,
+                "pursuer_reward": pursuer_reward,
+                "episode": {
+                    "r": evader_reward,
+                    "l": self.step_count,
+                },
+            })
+
         return normalized_obs.astype(np.float32, copy=False), evader_reward, terminated, truncated, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 
