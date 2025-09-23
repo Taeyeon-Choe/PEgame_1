@@ -603,7 +603,8 @@ function generate_case_figures(case_data, const, config)
         scatter(traj_x, traj_vx, 20, linspace(0, 1, numel(traj_x)), 'filled');
         xlabel('Position X [m]'); ylabel('Velocity V_x [m/s]');
         title('Phase Space (X vs V_x)');
-        colorbar('Label', 'Step progression');
+        cb_phase = colorbar;
+        ylabel(cb_phase, 'Step progression');
     else
         axis off; text(0.5, 0.5, 'Phase space unavailable', 'HorizontalAlignment', 'center');
     end

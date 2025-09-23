@@ -199,29 +199,49 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
     print(f"\n평가 결과 요약:")
     print(f"  captured: {captured}, evaded: {evaded}")
     
-    # avg_final_distance 키 확인 후 출력
-    if 'avg_final_distance' in summary:
-        print(f"  평균 최종 거리: {summary['avg_final_distance']:.2f} m")
-    else:
-        # 대체 키 확인
-        for key in ['average_final_distance', 'mean_final_distance', 'final_distance']:
-            if key in summary:
-                print(f"  평균 최종 거리: {summary[key]:.2f} m")
+    # 평균 최종 거리 출력 (다양한 키 지원)
+    distance_summary_keys = (
+        'avg_final_distance',
+        'average_final_distance',
+        'mean_final_distance',
+        'final_distance',
+    )
+    avg_final_distance = None
+    for key in distance_summary_keys:
+        value = summary.get(key)
+        if value is not None:
+            try:
+                avg_final_distance = float(value)
                 break
-        else:
-            # 개별 결과에서 직접 계산
-            if 'individual_results' in results:
-                distances = [r.get('final_distance_m', 0) for r in results['individual_results']]
-                if distances:
-                    avg_distance = sum(distances) / len(distances)
-                    print(f"  평균 최종 거리: {avg_distance:.2f} m")
-                else:
-                    print(f"  평균 최종 거리: 데이터 없음")
-            else:
-                print(f"  평균 최종 거리: 계산 불가")
+            except (TypeError, ValueError):
+                continue
+
+    if avg_final_distance is None and 'individual_results' in results:
+        individual_distance_keys = (
+            'final_distance_m',
+            'final_distance',
+            'final_relative_distance',
+        )
+        collected = []
+        for item in results['individual_results']:
+            for key in individual_distance_keys:
+                value = item.get(key)
+                if value is None:
+                    continue
+                try:
+                    collected.append(float(value))
+                    break
+                except (TypeError, ValueError):
+                    continue
+        if collected:
+            avg_final_distance = sum(collected) / len(collected)
+
+    if avg_final_distance is not None:
+        print(f"  평균 최종 거리: {avg_final_distance:.2f} m")
+    else:
+        print("  평균 최종 거리: 데이터 없음")
     
     print(f"  평균 회피자 delta-v: {summary.get('avg_evader_delta_v', 0):.2f} m/s")
-    print(f"  평균 Nash 메트릭: {summary.get('avg_nash_metric', 0):.4f}")
     print(f"  Zero-Sum 검증: {summary.get('zero_sum_verification', 0):.6f}")
     
     env.close()
@@ -437,6 +457,12 @@ def interactive_mode():
             if k_value:
                 config.environment.k = int(k_value)
 
+            max_steps_value = input(
+                f"최대 스텝 수 (기본값: {config.environment.max_steps}): "
+            ).strip()
+            if max_steps_value:
+                config.environment.max_steps = int(max_steps_value)
+
             # Delta-V 설정 입력
             delta_v_emax = input(
                 f"회피자 최대 Delta-V (기본값: {config.environment.delta_v_emax} m/s): "
@@ -482,6 +508,7 @@ def interactive_mode():
             print(f"  GA-STM 사용: {config.environment.use_gastm}")
             print(f"  dt: {config.environment.dt} s")
             print(f"  k: {config.environment.k}")
+            print(f"  최대 스텝: {config.environment.max_steps}")
             print(f"  회피자 최대 Delta-V: {config.environment.delta_v_emax} m/s")
             print(f"  추격자 최대 Delta-V: {config.environment.delta_v_pmax} m/s")
             print(f"  추격자 정책: {config.environment.pursuer_policy}")

@@ -262,23 +262,57 @@ class ModelEvaluator:
                                        n_tests: int) -> Dict[str, Any]:
         """종합 결과 계산"""
         # 기본 통계
-        success_rate = success_count / n_tests * 100
-        avg_distance = np.mean([r['final_distance_m'] for r in results])
-        avg_evader_dv = np.mean([r['evader_total_delta_v_ms'] for r in results])
-        avg_evader_reward = np.mean(zero_sum_metrics['evader_rewards'])
-        avg_pursuer_reward = np.mean(zero_sum_metrics['pursuer_rewards'])
-        avg_nash_metric = np.mean(zero_sum_metrics['nash_metrics']) if zero_sum_metrics['nash_metrics'] else 0
-        avg_impulse_count = np.mean(zero_sum_metrics['evader_impulse_counts'])
-        
+        success_rate = success_count / n_tests * 100 if n_tests else 0.0
+
+        def _valid(values):
+            filtered = []
+            for value in values:
+                if value is None:
+                    continue
+                try:
+                    val = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if np.isfinite(val):
+                    filtered.append(val)
+            return filtered
+
+        # 최종 거리는 환경/메트릭 버전에 따라 키가 다를 수 있어 순차적으로 확인한다.
+        distance_keys = (
+            'final_distance_m',
+            'final_distance',
+            'final_relative_distance',
+        )
+        final_distances = []
+        for key in distance_keys:
+            final_distances = _valid([r.get(key) for r in results])
+            if final_distances:
+                break
+        avg_distance = float(np.mean(final_distances)) if final_distances else 0.0
+
+        evader_delta_vs = _valid([r.get('evader_total_delta_v_ms') for r in results])
+        avg_evader_dv = float(np.mean(evader_delta_vs)) if evader_delta_vs else 0.0
+
+        evader_rewards = _valid(zero_sum_metrics['evader_rewards'])
+        pursuer_rewards = _valid(zero_sum_metrics['pursuer_rewards'])
+        avg_evader_reward = float(np.mean(evader_rewards)) if evader_rewards else 0.0
+        avg_pursuer_reward = float(np.mean(pursuer_rewards)) if pursuer_rewards else 0.0
+
+        impulse_counts = _valid(zero_sum_metrics['evader_impulse_counts'])
+        avg_impulse_count = float(np.mean(impulse_counts)) if impulse_counts else 0.0
+
         # 안전도 및 버퍼 시간 통계
-        avg_safety_score = np.mean(zero_sum_metrics['safety_scores']) if zero_sum_metrics['safety_scores'] else 0
-        avg_buffer_time = np.mean(zero_sum_metrics['buffer_times']) if zero_sum_metrics['buffer_times'] else 0
-        
+        safety_scores = _valid(zero_sum_metrics['safety_scores'])
+        avg_safety_score = float(np.mean(safety_scores)) if safety_scores else 0.0
+
+        buffer_times = _valid(zero_sum_metrics['buffer_times'])
+        avg_buffer_time = float(np.mean(buffer_times)) if buffer_times else 0.0
+
         # 변동성 통계
-        distance_std = np.std([r['final_distance_m'] for r in results])
-        dv_std = np.std([r['evader_total_delta_v_ms'] for r in results])
-        reward_std = np.std(zero_sum_metrics['evader_rewards'])
-        
+        distance_std = float(np.std(final_distances)) if len(final_distances) > 1 else 0.0
+        dv_std = float(np.std(evader_delta_vs)) if len(evader_delta_vs) > 1 else 0.0
+        reward_std = float(np.std(evader_rewards)) if len(evader_rewards) > 1 else 0.0
+
         comprehensive_results = {
             'summary': {
                 'total_tests': n_tests,
@@ -289,7 +323,6 @@ class ModelEvaluator:
                 'avg_evader_reward': avg_evader_reward,
                 'avg_pursuer_reward': avg_pursuer_reward,
                 'zero_sum_verification': avg_evader_reward + avg_pursuer_reward,
-                'avg_nash_metric': avg_nash_metric,
                 'avg_impulse_count': avg_impulse_count,
                 'avg_safety_score': avg_safety_score,
                 'avg_buffer_time': avg_buffer_time
@@ -418,7 +451,6 @@ class ModelEvaluator:
             f.write(f"평균 회피자 보상: {summary['avg_evader_reward']:.4f}\n")
             f.write(f"평균 추격자 보상: {summary['avg_pursuer_reward']:.4f}\n")
             f.write(f"Zero-Sum 검증: {summary['zero_sum_verification']:.6f}\n")
-            f.write(f"평균 Nash 메트릭: {summary['avg_nash_metric']:.4f}\n")
             f.write(f"평균 궤도 변경 횟수: {summary['avg_impulse_count']:.1f}\n")
             f.write(f"평균 안전도 점수: {summary['avg_safety_score']:.4f}\n")
             f.write(f"평균 버퍼 시간: {summary['avg_buffer_time']:.2f} 초\n\n")
@@ -563,7 +595,7 @@ class ModelEvaluator:
             f.write("=== 모델 비교 결과 ===\n\n")
             
             # 성능 지표별 비교
-            metrics = ['success_rate', 'avg_final_distance', 'avg_evader_delta_v', 'avg_nash_metric']
+            metrics = ['success_rate', 'avg_final_distance', 'avg_evader_delta_v']
             
             for metric in metrics:
                 f.write(f"\n{metric.replace('_', ' ').title()}:\n")

@@ -55,13 +55,13 @@ def main():
     
     # 4. 결과 출력
     print("\n=== 비교 결과 ===")
-    print(f"{'모델':<20} {'성공률':<10} {'평균거리':<12} {'Nash메트릭':<12}")
-    print("-" * 60)
+    print(f"{'모델':<20} {'성공률':<10} {'평균거리':<12}")
+    print('-' * 45)
     
     for name, results in comparison_results.items():
         print(f"{name:<20} {results['success_rate']:<10.1f}% "
               f"{results['avg_final_distance']:<12.0f} "
-              f"{results['avg_nash_metric']:<12.4f}")
+        print(f"{name:<20} {results['success_rate']:<10.1f}% {results['avg_final_distance']:<12.0f}")
     
     # 5. 정리
     env.close()

@@ -42,7 +42,7 @@ def main(model_path: str):
     print(f"  성공률: {summary['success_rate']:.1f}%")
     print(f"  평균 최종 거리: {summary['avg_final_distance']:.2f} m")
     print(f"  평균 회피자 delta-v: {summary['avg_evader_delta_v']:.2f} m/s")
-    print(f"  Nash 메트릭: {summary['avg_nash_metric']:.4f}")
+    print(f"  Zero-Sum 검증: {summary['zero_sum_verification']:.6f}")
     
     # 7. 데모 실행
     print("\n데모 실행 중...")
