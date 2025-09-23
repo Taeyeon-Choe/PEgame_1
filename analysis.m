@@ -3,7 +3,15 @@
 %  Generates mission diagnostics directly from Python training outputs.
 % ========================================================================
 
-clearvars; close all; clc;
+if exist('analysis_config_override', 'var')
+    temp_override = analysis_config_override; %#ok<NASGU>
+    clearvars -except temp_override;
+    analysis_config_override = temp_override; %#ok<NASGU>
+    clear temp_override;
+else
+    clearvars;
+end
+close all; clc;
 format long g;
 
 % Global plotting defaults
@@ -109,13 +117,22 @@ switch mode
             trajectory.times = ensure_vector(primary_episode.times);
         end
 
-        if ~isempty(trajectory) && (~isfield(trajectory, 'distances') || isempty(trajectory.distances))
+        has_xyz = isfield(trajectory, 'x') && isfield(trajectory, 'y') && isfield(trajectory, 'z');
+        if has_xyz && (~isfield(trajectory, 'distances') || isempty(trajectory.distances))
             trajectory.distances = sqrt(trajectory.x.^2 + trajectory.y.^2 + trajectory.z.^2);
         end
 
-        if ~isempty(trajectory) && (~isfield(trajectory, 'times') || isempty(trajectory.times))
-            n_points = numel(trajectory.distances);
-            trajectory.times = (0:n_points-1)';
+        if ~isfield(trajectory, 'times') || isempty(trajectory.times)
+            if isfield(trajectory, 'distances') && ~isempty(trajectory.distances)
+                n_points = numel(trajectory.distances);
+            elseif has_xyz
+                n_points = numel(trajectory.x);
+            else
+                n_points = 0;
+            end
+            if n_points > 0
+                trajectory.times = (0:n_points-1)';
+            end
         end
 
         step_dv = struct();
@@ -553,18 +570,120 @@ function generate_case_figures(case_data, const, config)
     if has_trajectory
         subplot(2, 3, [1, 4]);
         hold on; grid on; box on;
-        c = linspace(0, 1, numel(traj_x));
-        surface([traj_x; nan], [traj_y; nan], [traj_z; nan], [c'; nan], ...
-            'EdgeColor', 'interp', 'FaceColor', 'none', 'LineWidth', 2.5);
-        plot3(0, 0, 0, 'o', 'MarkerSize', 10, 'MarkerFaceColor', [0 0.8 0], 'MarkerEdgeColor', 'k');
-        plot3(traj_x(1), traj_y(1), traj_z(1), '^', 'MarkerSize', 9, 'MarkerFaceColor', [0.8 0 0], 'MarkerEdgeColor', 'k');
-        plot3(traj_x(end), traj_y(end), traj_z(end), 's', 'MarkerSize', 9, 'MarkerFaceColor', [0.2 0.2 0.2], 'MarkerEdgeColor', 'k');
+
+        traj_x = traj_x(:);
+        traj_y = traj_y(:);
+        traj_z = traj_z(:);
+        coords = [traj_x, traj_y, traj_z];
+
+        trajectory_color = [0.0, 0.4470, 0.7410];
+        evader_color = [0.0, 0.6, 0.0];
+        pursuer_color = [0.8, 0.2, 0.2];
+
+        traj_handle = plot3(traj_x, traj_y, traj_z, 'Color', trajectory_color, 'LineWidth', 2.2, ...
+            'DisplayName', 'Relative Trajectory');
+        hold on;
+        start_handle = plot3(traj_x(1), traj_y(1), traj_z(1), '^', 'MarkerSize', 9, ...
+            'MarkerFaceColor', evader_color, 'MarkerEdgeColor', 'k', 'LineStyle', 'none', ...
+            'DisplayName', 'Start');
+        end_handle = plot3(traj_x(end), traj_y(end), traj_z(end), 'x', 'MarkerSize', 9, ...
+            'MarkerEdgeColor', pursuer_color, 'LineWidth', 1.8, 'LineStyle', 'none', ...
+            'DisplayName', 'End');
+        evader_handle = plot3(0, 0, 0, 'p', 'MarkerSize', 11, 'MarkerFaceColor', [0 0 0], ...
+            'MarkerEdgeColor', 'k', 'LineStyle', 'none', 'DisplayName', 'Evader (Origin)');
+
         draw_zone_spheres(const);
+
+        range_x = max(traj_x, [], 'omitnan') - min(traj_x, [], 'omitnan');
+        range_y = max(traj_y, [], 'omitnan') - min(traj_y, [], 'omitnan');
+        range_z = max(traj_z, [], 'omitnan') - min(traj_z, [], 'omitnan');
+        ranges = [range_x, range_y, range_z];
+        max_range = max(ranges);
+        if ~isfinite(max_range) || max_range <= 0
+            max_range = max(vecnorm(coords, 2, 2), [], 'omitnan');
+        end
+        if isempty(max_range) || max_range <= 0
+            max_range = 1.0;
+        end
+
+        arrow_length = 0.05 * max_range;
+        if size(coords, 1) > 1
+            step_norms = vecnorm(diff(coords, 1, 1), 2, 2);
+            step_norms = step_norms(isfinite(step_norms) & step_norms > 0);
+            if ~isempty(step_norms)
+                sorted_steps = sort(step_norms);
+                idx_percentile = max(1, round(0.75 * numel(sorted_steps)));
+                typical_step = sorted_steps(idx_percentile);
+                arrow_length = min(arrow_length, typical_step * 0.8);
+            end
+        end
+        if arrow_length <= 0
+            arrow_length = max_range * 0.1;
+        end
+
+        pursuer_handle = [];
+        if isfield(step_dv, 'pursuer_vectors') && ~isempty(step_dv.pursuer_vectors)
+            dv_p = step_dv.pursuer_vectors;
+            n_p = size(dv_p, 1);
+            n_traj = numel(traj_x);
+            max_count = min(n_p, n_traj);
+            dv_p = dv_p(1:max_count, :);
+            traj_subset = coords(1:max_count, :);
+            magnitudes = vecnorm(dv_p, 2, 2);
+            valid_idx = find(isfinite(magnitudes) & magnitudes > 0);
+            for vidx = valid_idx(:)'
+                direction = dv_p(vidx, :);
+                scale_factor = arrow_length / magnitudes(vidx);
+                scaled_vec = direction * scale_factor;
+                base_pos = traj_subset(vidx, :);
+                q = quiver3(base_pos(1), base_pos(2), base_pos(3), ...
+                    scaled_vec(1), scaled_vec(2), scaled_vec(3), 0);
+                q.Color = pursuer_color;
+                q.LineWidth = 1.1;
+                q.MaxHeadSize = 0.6;
+                if isempty(pursuer_handle)
+                    q.DisplayName = 'Pursuer ΔV';
+                    pursuer_handle = q;
+                else
+                    q.HandleVisibility = 'off';
+                end
+            end
+        end
+
+        evader_impulse_handle = [];
+        if isfield(step_dv, 'evader_vectors') && ~isempty(step_dv.evader_vectors)
+            dv_e = step_dv.evader_vectors;
+            magnitudes = vecnorm(dv_e, 2, 2);
+            valid_idx = find(isfinite(magnitudes) & magnitudes > 0);
+            for vidx = valid_idx(:)'
+                direction = dv_e(vidx, :);
+                scale_factor = arrow_length / magnitudes(vidx);
+                scaled_vec = direction * scale_factor;
+                q = quiver3(0, 0, 0, scaled_vec(1), scaled_vec(2), scaled_vec(3), 0);
+                q.Color = evader_color;
+                q.LineWidth = 1.0;
+                q.MaxHeadSize = 0.6;
+                if isempty(evader_impulse_handle)
+                    q.DisplayName = 'Evader ΔV';
+                    evader_impulse_handle = q;
+                else
+                    q.HandleVisibility = 'off';
+                end
+            end
+        end
+
         xlabel('X [m]'); ylabel('Y [m]'); zlabel('Z [m]');
         title(sprintf('%s - Outcome: %s', case_data.label, mission_outcome_str));
         axis equal; view(45, 25);
-        cb = colorbar;
-        ylabel(cb, 'Step progression');
+
+        legend_handles = [traj_handle, start_handle, end_handle, evader_handle];
+        if ~isempty(evader_impulse_handle)
+            legend_handles(end+1) = evader_impulse_handle; %#ok<AGROW>
+        end
+        if ~isempty(pursuer_handle)
+            legend_handles(end+1) = pursuer_handle; %#ok<AGROW>
+        end
+        legend(legend_handles, 'Location', 'best');
     else
         subplot(2, 3, [1, 4]);
         axis off;
@@ -995,10 +1114,12 @@ function plot_delta_v_diagnostics(step_dv, evader_cumulative, pursuer_cumulative
     subplot(3, 3, 6);
     hold on; grid on; box on;
     sample_idx = 1:max(1, floor(numel(time_axis)/25)):numel(time_axis);
-    quiver3(zeros(size(sample_idx)), zeros(size(sample_idx)), zeros(size(sample_idx)), ...
+    sample_idx = sample_idx(:);
+    origin = zeros(numel(sample_idx), 1);
+    quiver3(origin, origin, origin, ...
             step_dv.evader_vectors(sample_idx,1), step_dv.evader_vectors(sample_idx,2), step_dv.evader_vectors(sample_idx,3), ...
             'Color', [0 0.8 0], 'LineWidth', 1.2);
-    quiver3(zeros(size(sample_idx)), zeros(size(sample_idx)), zeros(size(sample_idx)), ...
+    quiver3(origin, origin, origin, ...
             step_dv.pursuer_vectors(sample_idx,1), step_dv.pursuer_vectors(sample_idx,2), step_dv.pursuer_vectors(sample_idx,3), ...
             'Color', [0.8 0 0], 'LineWidth', 1.2);
     xlabel('ΔV_x'); ylabel('ΔV_y'); zlabel('ΔV_z'); title('ΔV Directions'); view(45, 25); axis equal;
@@ -1010,8 +1131,21 @@ function plot_delta_v_diagnostics(step_dv, evader_cumulative, pursuer_cumulative
     xlabel('|ΔV| [m/s]'); ylabel('Frequency'); title('ΔV Distribution');
 
     subplot(3, 3, 8);
-    boxplot([step_dv.evader_magnitude, step_dv.pursuer_magnitude], {'Evader', 'Pursuer'});
-    ylabel('|ΔV| [m/s]'); title('ΔV Statistical Comparison'); grid on;
+    hold on; grid on; box on;
+    dv_matrix = [step_dv.evader_magnitude, step_dv.pursuer_magnitude];
+    dv_labels = {'Evader', 'Pursuer'};
+    try
+        boxplot(dv_matrix, dv_labels);
+        ylabel('|ΔV| [m/s]');
+        title('ΔV Statistical Comparison');
+        grid on;
+    catch boxplotErr %#ok<NASGU>
+        cla;
+        hold on; grid on; box on;
+        plot_delta_v_boxplot_fallback({step_dv.evader_magnitude, step_dv.pursuer_magnitude}, dv_labels);
+        ylabel('|ΔV| [m/s]');
+        title('ΔV Statistical Comparison (Fallback)');
+    end
 
     subplot(3, 3, 9);
     hold on; grid on; box on;
@@ -1023,6 +1157,50 @@ function plot_delta_v_diagnostics(step_dv, evader_cumulative, pursuer_cumulative
     if ~isempty(dt_seconds)
         sgtitle(sprintf('ΔV Diagnostics (Δt ≈ %.1f s)', dt_seconds));
     end
+end
+
+function plot_delta_v_boxplot_fallback(dv_sets, dv_labels)
+    dv_colors = [0 0.8 0; 0.8 0 0];
+    box_width = 0.35;
+    for idx = 1:numel(dv_sets)
+        data_vec = dv_sets{idx};
+        data_vec = data_vec(~isnan(data_vec));
+        if isempty(data_vec)
+            continue;
+        end
+        data_vec = sort(data_vec(:));
+        n = numel(data_vec);
+        if n == 1
+            quartiles = repmat(data_vec, 1, 3);
+        else
+            positions = (n - 1) * [0.25, 0.5, 0.75] + 1;
+            quartiles = interp1(1:n, data_vec, positions, 'linear');
+        end
+        q1 = quartiles(1);
+        q2 = quartiles(2);
+        q3 = quartiles(3);
+        iqr_val = q3 - q1;
+        whisker_low = max(data_vec(data_vec >= q1 - 1.5 * iqr_val), [], 'omitnan');
+        whisker_high = min(data_vec(data_vec <= q3 + 1.5 * iqr_val), [], 'omitnan');
+        if isempty(whisker_low)
+            whisker_low = data_vec(1);
+        end
+        if isempty(whisker_high)
+            whisker_high = data_vec(end);
+        end
+        x_pos = idx;
+        base_color = dv_colors(min(idx, size(dv_colors, 1)), :);
+        fill([x_pos - box_width, x_pos - box_width, x_pos + box_width, x_pos + box_width], ...
+             [q1, q3, q3, q1], base_color, 'FaceAlpha', 0.25, 'EdgeColor', base_color);
+        plot([x_pos - box_width, x_pos + box_width], [q2, q2], 'Color', base_color, 'LineWidth', 2);
+        plot([x_pos, x_pos], [whisker_low, q1], 'Color', base_color, 'LineWidth', 1.2);
+        plot([x_pos, x_pos], [q3, whisker_high], 'Color', base_color, 'LineWidth', 1.2);
+        plot([x_pos - box_width/2, x_pos + box_width/2], [whisker_low, whisker_low], 'Color', base_color, 'LineWidth', 1.2);
+        plot([x_pos - box_width/2, x_pos + box_width/2], [whisker_high, whisker_high], 'Color', base_color, 'LineWidth', 1.2);
+        scatter(repmat(x_pos, size(data_vec)), data_vec, 8, 'MarkerEdgeColor', base_color, 'Marker', '.');
+    end
+    xlim([0.5, numel(dv_sets) + 0.5]);
+    set(gca, 'XTick', 1:numel(dv_sets), 'XTickLabel', dv_labels);
 end
 
 function plot_mission_statistics(rel_distance, rel_velocity, evader_cumulative, pursuer_cumulative, per_episode_dv, progress, stats, const)

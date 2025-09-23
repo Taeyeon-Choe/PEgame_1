@@ -8,6 +8,7 @@ import sys
 import os
 import warnings
 import math
+from pathlib import Path
 from typing import Optional
 
 # 경고 필터링 (프로덕션 모드)
@@ -72,21 +73,76 @@ def create_parallel_env(config: ProjectConfig):
         return make_env()
 
 
-def train_standard_model(config: ProjectConfig, save_path: Optional[str] = None) -> SACTrainer:
-    """표준 SAC 모델 학습"""
+def _infer_existing_log_dir(model_path: str) -> Optional[str]:
+    """체크포인트 경로에서 기존 로그 폴더 추론"""
+    try:
+        path = Path(model_path).expanduser().resolve()
+    except Exception:
+        return None
+
+    if not path.exists():
+        return None
+
+    if path.is_dir():
+        return str(path)
+
+    parent = path.parent
+    if parent.name == "models":
+        candidate = parent.parent
+        if candidate.exists():
+            return str(candidate)
+
+    return None
+
+
+def train_standard_model(
+    config: ProjectConfig,
+    save_path: Optional[str] = None,
+    load_model_path: Optional[str] = None,
+    load_replay_buffer: bool = True,
+) -> Optional[SACTrainer]:
+    """표준 SAC 모델 학습 (옵션: 기존 모델 이어서 학습)"""
     print("\n=== 표준 SAC 모델 학습 시작 ===")
     
     # 병렬 환경 생성
     env = create_parallel_env(config)
     
+    log_dir_override = None
+    if load_model_path:
+        log_dir_override = _infer_existing_log_dir(load_model_path)
+        if log_dir_override:
+            print(f"기존 로그 디렉토리 재사용: {log_dir_override}")
+        else:
+            print("기존 로그 디렉토리를 찾지 못해 새로운 로그 디렉토리를 생성합니다.")
+
     # 트레이너 생성
-    trainer = create_trainer(env, config, experiment_name=config.experiment_name)
+    trainer = create_trainer(
+        env,
+        config,
+        experiment_name=config.experiment_name,
+        log_dir=log_dir_override,
+        resume=bool(load_model_path and log_dir_override),
+    )
     
-    # 모델 설정
-    trainer.setup_model()
+    # 모델 설정 또는 기존 체크포인트 로드
+    if load_model_path:
+        print(f"기존 모델에서 이어서 학습: {load_model_path}")
+        model = trainer.load_model(load_model_path, load_replay_buffer=load_replay_buffer)
+        if model is None:
+            print("기존 모델 로드에 실패하여 학습을 중단합니다.")
+            if hasattr(env, 'close'):
+                env.close()
+            return None
+        reset_num_timesteps = False
+    else:
+        trainer.setup_model()
+        reset_num_timesteps = True
     
     # 학습 실행
-    trainer.train(total_timesteps=config.training.total_timesteps)
+    trainer.train(
+        total_timesteps=config.training.total_timesteps,
+        reset_num_timesteps=reset_num_timesteps,
+    )
     
     # train() 내부에서 최종 모델이 저장되므로 별도 저장 생략
     final_model_path = f"{trainer.log_dir}/models/sac_final.zip"
@@ -305,11 +361,37 @@ def interactive_mode():
             use_gastm = input("GA-STM 사용? (y/n, 기본값: y): ").strip().lower()
             use_gastm = use_gastm != 'n'
 
+            # 기존 모델 이어서 학습 여부
+            resume_choice = input("기존 모델에서 이어서 학습하시겠습니까? (y/n, 기본값: n): ").strip().lower()
+            resume_training = resume_choice == 'y'
+            load_model_path = None
+            load_replay_buffer = True
+            resume_log_dir = None
+
+            if resume_training:
+                default_model_path = "models/sac_final.zip"
+                load_model_input = input(
+                    f"불러올 모델 경로 (기본값: {default_model_path}): "
+                ).strip()
+                load_model_path = load_model_input if load_model_input else default_model_path
+
+                if not os.path.exists(load_model_path):
+                    print(f"모델 파일을 찾을 수 없습니다: {load_model_path}")
+                    continue
+
+                resume_log_dir = _infer_existing_log_dir(load_model_path)
+
+                replay_choice = input(
+                    "리플레이 버퍼도 로드하시겠습니까? (y/n, 기본값: y): "
+                ).strip().lower()
+                load_replay_buffer = replay_choice != 'n'
+
             # 고급 설정 여부
             advanced = input("고급 설정을 하시겠습니까? (y/n, 기본값: y): ").strip().lower()
             advanced = advanced != 'n'
             
             config = get_config(experiment_name="interactive_training")
+            config.environment.pursuer_policy = "tvlqr"
             config.training.total_timesteps = timesteps
             config.environment.use_gastm = use_gastm
 
@@ -413,10 +495,23 @@ def interactive_mode():
                 print(f"    · Q diag: {config.environment.lqr_Q_diag}")
                 print(f"    · QN diag: {config.environment.lqr_QN_diag}")
                 print(f"    · R diag: {config.environment.lqr_R_diag}")
+            if resume_training:
+                print(f"  - 기존 모델 이어서 학습: True ({load_model_path})")
+                print(f"    · 리플레이 버퍼 로드: {load_replay_buffer}")
+                if resume_log_dir:
+                    print(f"    · 로그 디렉토리 재사용: {resume_log_dir}")
+                else:
+                    print("    · 로그 디렉토리 재사용: 지원되지 않아 새 디렉토리 생성")
+            else:
+                print("  - 기존 모델 이어서 학습: False")
 
             confirm = input("\n이 설정으로 학습을 시작하시겠습니까? (y/n): ").strip().lower()
             if confirm == 'y':
-                train_standard_model(config)
+                train_standard_model(
+                    config,
+                    load_model_path=load_model_path if resume_training else None,
+                    load_replay_buffer=load_replay_buffer,
+                )
             else:
                 print("학습이 취소되었습니다.")
             
@@ -435,6 +530,7 @@ def interactive_mode():
             use_gastm = input("평가 시 GA-STM 사용? (y/n, 기본값: y): ").strip().lower()
 
             config = get_config(experiment_name="interactive_evaluation")
+            config.environment.pursuer_policy = "tvlqr"
             config.environment.use_gastm = use_gastm != 'n'
 
             policy_default = config.environment.pursuer_policy

@@ -3,6 +3,9 @@ SAC 모델 트레이너 클래스
 """
 
 import os
+import csv
+import json
+import pickle
 import datetime
 from pathlib import Path
 
@@ -34,7 +37,8 @@ patch_sb3_system_info()
 class SACTrainer:
     """SAC 알고리즘 트레이너"""
 
-    def __init__(self, env, config: Optional[ProjectConfig] = None, experiment_name=None, log_dir=None):
+    def __init__(self, env, config: Optional[ProjectConfig] = None, experiment_name=None,
+                 log_dir=None, resume: bool = False):
         """
         트레이너 초기화
 
@@ -43,6 +47,7 @@ class SACTrainer:
             config: 프로젝트 설정
             experiment_name: 실험 이름
             log_dir: 로그 디렉토리 경로
+            resume: 기존 로그 및 분석 데이터를 이어서 사용할지 여부
         """
         if config is None:
             from config.settings import default_config
@@ -53,6 +58,7 @@ class SACTrainer:
         self.experiment_name = experiment_name or config.experiment_name
         self.training_config = config.training
         self.paths_config = config.paths
+        self.resume_mode = resume
 
         # 모델 및 로깅 설정
         self.model = None
@@ -66,6 +72,7 @@ class SACTrainer:
         # 로그 디렉토리 설정
         if log_dir:
             self.log_dir = log_dir
+            self._ensure_log_structure(self.log_dir)
         else:
             self.log_dir = self._setup_log_directory()
         
@@ -73,23 +80,245 @@ class SACTrainer:
         self.config.save_to_file(f"{self.log_dir}/config.json")
         print(f"설정 저장: {self.log_dir}/config.json")
 
+        # 이어 학습을 위한 기존 데이터 로드
+        self.resume_state = self._load_resume_state() if self.resume_mode else {}
+
     def _setup_log_directory(self) -> str:
         """로그 디렉토리 설정 및 생성"""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_dir = f"{self.paths_config.logs}/{self.experiment_name}_{timestamp}"
         
-        # 메인 디렉토리 생성
-        os.makedirs(log_dir, exist_ok=True)
-
-        # 서브 디렉토리들 생성
-        subdirs = ["plots", "models", "tensorboard", "data", "eval"]
-        for subdir in subdirs:
-            os.makedirs(f"{log_dir}/{subdir}", exist_ok=True)
+        self._ensure_log_structure(log_dir)
         
         self._write_matlab_training_script(log_dir)
 
         print(f"로그 디렉토리 생성 완료: {log_dir}")
         return log_dir
+
+    def _ensure_log_structure(self, log_dir: str) -> None:
+        """학습 로그 폴더 기본 구조 보장"""
+        os.makedirs(log_dir, exist_ok=True)
+
+        subdirs = ["plots", "models", "tensorboard", "data", "eval"]
+        for subdir in subdirs:
+            os.makedirs(f"{log_dir}/{subdir}", exist_ok=True)
+
+    def _load_resume_state(self) -> Dict[str, Any]:
+        """기존 학습 로그에서 이어학습에 필요한 데이터를 불러옴"""
+        state: Dict[str, Any] = {}
+        plots_dir = Path(self.log_dir) / "plots"
+
+        shared_state: Dict[str, Any] = {}
+        if plots_dir.exists():
+            resume_file = plots_dir / "resume_state.json"
+            shared_state = self._safe_json_load(resume_file) or {}
+            shared_state = self._populate_shared_state_from_files(shared_state, plots_dir)
+            if shared_state:
+                state["shared"] = shared_state
+
+        analysis_state = self._load_analysis_state()
+        if analysis_state:
+            state["analysis"] = analysis_state
+
+        return state
+
+    def _populate_shared_state_from_files(self, current: Dict[str, Any], plots_dir: Path) -> Dict[str, Any]:
+        """기존 플롯/데이터 파일을 기반으로 상태 정보를 채움"""
+        state = dict(current) if current else {}
+
+        # 성공률 시퀀스
+        if not state.get("success_rates"):
+            success_rates = self._load_csv_series(plots_dir / "success_rate_data.csv", "success_rate")
+            if success_rates:
+                state["success_rates"] = success_rates
+                state.setdefault("episode_count", len(success_rates))
+
+        # 보상 데이터
+        if not state.get("evader_rewards") or not state.get("pursuer_rewards"):
+            reward_series = self._load_csv_multi(
+                plots_dir / "rewards_data.csv",
+                {
+                    "evader_reward": float,
+                    "pursuer_reward": float,
+                },
+            )
+            evader_rewards = reward_series.get("evader_reward", [])
+            pursuer_rewards = reward_series.get("pursuer_reward", [])
+            if evader_rewards:
+                state.setdefault("evader_rewards", evader_rewards)
+            if pursuer_rewards:
+                state.setdefault("pursuer_rewards", pursuer_rewards)
+
+        # Nash 메트릭
+        if not state.get("nash_metrics"):
+            nash_metrics = self._load_csv_series(plots_dir / "nash_metrics.csv", "nash_metric")
+            if nash_metrics:
+                state["nash_metrics"] = nash_metrics
+
+        # 결과 분포
+        if not state.get("outcome_counts"):
+            outcome_distribution = self._safe_json_load(plots_dir / "outcome_distribution.json")
+            if isinstance(outcome_distribution, dict):
+                normalized = {}
+                for key, value in outcome_distribution.items():
+                    try:
+                        normalized[self._normalize_outcome_key(key)] = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                if normalized:
+                    state["outcome_counts"] = normalized
+
+        # 세부 통계 (회피 기록)
+        stats = self._safe_json_load(plots_dir / "evasion_stats.json")
+        if isinstance(stats, dict):
+            state.setdefault("episode_count", stats.get("total_episodes", state.get("episode_count")))
+            state.setdefault("captures", stats.get("captures"))
+            state.setdefault("evasions", stats.get("evasions"))
+            state.setdefault("permanent_evasions", stats.get("permanent_evasions"))
+            state.setdefault("conditional_evasions", stats.get("conditional_evasions"))
+            state.setdefault("temporary_evasions", stats.get("temporary_evasions"))
+            state.setdefault("fuel_depleted", stats.get("fuel_depleted"))
+            state.setdefault("max_steps", stats.get("max_steps"))
+            if not state.get("evader_delta_vs"):
+                state["evader_delta_vs"] = stats.get("evader_delta_v", [])
+            if not state.get("episodes_info"):
+                state["episodes_info"] = stats.get("episodes_info", [])
+
+        # 에피소드 정보 기반 추가 데이터 계산
+        episodes_info = state.get("episodes_info", [])
+        if episodes_info and not state.get("buffer_times"):
+            buffer_times = [
+                float(info.get("buffer_time", 0))
+                for info in episodes_info
+                if info.get("buffer_time")
+            ]
+            if buffer_times:
+                state["buffer_times"] = buffer_times
+
+        if episodes_info and not state.get("recent_successes"):
+            recent_successes = [1 if info.get("success") else 0 for info in episodes_info][-100:]
+            if recent_successes:
+                state["recent_successes"] = recent_successes
+
+        if state.get("evader_delta_vs") and not state.get("recent_delta_v"):
+            recent_delta = state["evader_delta_vs"][-100:]
+            if recent_delta:
+                state["recent_delta_v"] = recent_delta
+
+        # outcome_counts가 없다면 episodes_info로 추정
+        if not state.get("outcome_counts") and episodes_info:
+            counts = {
+                "captured": 0,
+                "permanent_evasion": 0,
+                "conditional_evasion": 0,
+                "fuel_depleted": 0,
+                "max_steps": 0,
+            }
+            for info in episodes_info:
+                outcome = self._normalize_outcome_key(info.get("outcome", "unknown"))
+                if outcome in counts:
+                    counts[outcome] += 1
+            state["outcome_counts"] = counts
+
+        # 총 에피소드 수 보완
+        if not state.get("episode_count") and state.get("success_rates"):
+            state["episode_count"] = len(state["success_rates"])
+
+        if not state.get("episode_count") and episodes_info:
+            state["episode_count"] = episodes_info[-1].get("episode")
+
+        return state
+
+    def _load_csv_series(self, path: Path, column: str) -> List[float]:
+        values: List[float] = []
+        if not path.exists():
+            return values
+        try:
+            with open(path, newline='') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    value = row.get(column)
+                    if value in (None, ''):
+                        continue
+                    try:
+                        values.append(float(value))
+                    except ValueError:
+                        try:
+                            values.append(int(value))
+                        except ValueError:
+                            continue
+        except Exception as exc:
+            print(f"CSV 로드 실패: {path} ({exc})")
+        return values
+
+    def _load_csv_multi(self, path: Path, columns: Dict[str, Any]) -> Dict[str, List[float]]:
+        data: Dict[str, List[float]] = {key: [] for key in columns.keys()}
+        if not path.exists():
+            return data
+        try:
+            with open(path, newline='') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    for key, caster in columns.items():
+                        value = row.get(key)
+                        if value in (None, ''):
+                            continue
+                        try:
+                            data[key].append(caster(value))
+                        except (TypeError, ValueError):
+                            continue
+        except Exception as exc:
+            print(f"CSV 로드 실패: {path} ({exc})")
+        return data
+
+    def _safe_json_load(self, path: Path) -> Optional[Dict[str, Any]]:
+        if not path.exists():
+            return None
+        try:
+            with open(path, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError as exc:
+            print(f"JSON 로드 실패: {path} ({exc})")
+            return None
+        except Exception as exc:
+            print(f"JSON 로드 실패: {path} ({exc})")
+            return None
+
+    @staticmethod
+    def _normalize_outcome_key(key: str) -> str:
+        normalized = key.lower().replace('-', ' ').replace('_', ' ').strip()
+        mapping = {
+            'captured': 'captured',
+            'capture': 'captured',
+            'permanent evasion': 'permanent_evasion',
+            'permanent_evasion': 'permanent_evasion',
+            'conditional evasion': 'conditional_evasion',
+            'conditional_evasion': 'conditional_evasion',
+            'temporary evasion': 'temporary_evasion',
+            'temporary_evasion': 'temporary_evasion',
+            'fuel depleted': 'fuel_depleted',
+            'fuel_depleted': 'fuel_depleted',
+            'max steps': 'max_steps',
+            'max_steps': 'max_steps',
+        }
+        return mapping.get(normalized, normalized.replace(' ', '_'))
+
+    def _load_analysis_state(self) -> Dict[str, Any]:
+        analysis_dir = Path(self.log_dir) / "analysis"
+        if not analysis_dir.exists():
+            return {}
+
+        pkl_path = analysis_dir / "analysis_data.pkl"
+        if pkl_path.exists():
+            try:
+                with open(pkl_path, 'rb') as f:
+                    return pickle.load(f)
+            except Exception as exc:
+                print(f"분석 데이터 로드 실패: {pkl_path} ({exc})")
+
+        json_path = analysis_dir / "analysis_data.json"
+        data = self._safe_json_load(json_path)
+        return data or {}
 
     def _write_matlab_training_script(self, log_dir: str) -> None:
         """학습 로그 폴더에 MATLAB 분석 스크립트를 생성."""
@@ -180,17 +409,23 @@ class SACTrainer:
         self.callbacks = []
 
         # 1. 성능 추적 콜백 (plots 저장 포함)
+        shared_resume = self.resume_state.get("shared") if self.resume_mode else None
+
         performance_callback = PerformanceCallback(
             log_dir=self.log_dir,
             plot_freq=100,  # 100 에피소드마다 플롯 저장
-            verbose=1
+            verbose=1,
+            resume=self.resume_mode,
+            resume_data=shared_resume,
         )
         self.callbacks.append(performance_callback)
 
         # 2. 회피 성공률 추적
         evasion_callback = EvasionTrackingCallback(
             verbose=1, 
-            log_dir=f"{self.log_dir}/plots"
+            log_dir=f"{self.log_dir}/plots",
+            resume=self.resume_mode,
+            resume_data=shared_resume,
         )
         self.callbacks.append(evasion_callback)
 
@@ -204,6 +439,7 @@ class SACTrainer:
             episode_plot_freq=200,
             save_dir=f"{self.log_dir}/analysis",
             verbose=1,
+            resume_data=self.resume_state.get("analysis") if self.resume_mode else None,
         )
         self.callbacks.append(detailed_callback)
 
@@ -330,6 +566,12 @@ class SACTrainer:
         try:
             self.model = SAC.load(load_path, env=self.env, device=self.training_config.device)
             print(f"모델 로드됨: {load_path}")
+
+            # 새 로그 디렉토리에 맞춰 로거와 텐서보드 경로 재설정
+            self.logger = configure(self.log_dir, ["stdout", "csv", "tensorboard"])
+            self.model.set_logger(self.logger)
+            if hasattr(self.model, "tensorboard_log"):
+                self.model.tensorboard_log = f"{self.log_dir}/tensorboard"
 
             # 리플레이 버퍼 로드 (선택적)
             if load_replay_buffer:
@@ -519,11 +761,17 @@ class SACTrainer:
         print("리소스 정리 완료")
 
 
-def create_trainer(env, config: Optional[ProjectConfig] = None, experiment_name: Optional[str] = None) -> SACTrainer:
+def create_trainer(
+    env,
+    config: Optional[ProjectConfig] = None,
+    experiment_name: Optional[str] = None,
+    log_dir: Optional[str] = None,
+    resume: bool = False,
+) -> SACTrainer:
     """트레이너 생성 헬퍼 함수"""
     if config is None:
         from config.settings import get_config
         config = get_config(experiment_name=experiment_name)
 
-    trainer = SACTrainer(env, config, experiment_name=experiment_name)
+    trainer = SACTrainer(env, config, experiment_name=experiment_name, log_dir=log_dir, resume=resume)
     return trainer

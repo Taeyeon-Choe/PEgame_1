@@ -8,6 +8,7 @@ import datetime
 import os
 import copy
 import json
+from typing import Any, Dict, Optional
 from collections import deque, Counter
 from stable_baselines3.common.callbacks import BaseCallback
 import torch
@@ -44,7 +45,8 @@ def _json_ready(value):
 class EvasionTrackingCallback(BaseCallback):
     """회피 결과 추적 콜백 (벡터 환경 완전 지원)"""
     
-    def __init__(self, verbose=0, window_size=100, log_dir=None):
+    def __init__(self, verbose=0, window_size=100, log_dir=None,
+                 resume: bool = False, resume_data: Optional[Dict[str, Any]] = None):
         super().__init__(verbose)
         self.outcomes = []
         self.success_rates = []
@@ -82,6 +84,10 @@ class EvasionTrackingCallback(BaseCallback):
         # Nash Equilibrium 평가를 위한 정책 히스토리
         self.policy_history = []
         self.eval_frequency = ANALYSIS_PARAMS['eval_frequency']
+
+        self._resume_enabled = resume
+        if resume and resume_data:
+            self._restore_from_resume(resume_data)
     
     def _on_step(self):
         """에피소드 종료 시 처리 - 벡터 환경 완전 지원 (수정된 버전)"""
@@ -188,7 +194,11 @@ class EvasionTrackingCallback(BaseCallback):
         
         # Tensorboard 로깅
         self._log_to_tensorboard(success_rate if 'success_rate' in locals() else 0.0)
-    
+
+        # 이어학습을 위한 상태 저장 (주기적으로)
+        if self._resume_enabled and (self.episode_count % 20 == 0 or self.episode_count < 20):
+            self._write_resume_state()
+
     def _update_outcome_counts(self, outcome):
         """결과별 카운트 업데이트"""
         outcome = outcome.lower()
@@ -278,7 +288,7 @@ class EvasionTrackingCallback(BaseCallback):
             print(f"  결과: {latest_info.get('outcome', 'UNKNOWN').upper()}")
         
         print(f"{'='*70}")
-    
+
     def _log_to_tensorboard(self, success_rate):
         """Tensorboard 로깅"""
         # SB3의 logger 사용
@@ -333,7 +343,10 @@ class EvasionTrackingCallback(BaseCallback):
         except Exception as e:
             if self.verbose > 0:
                 print(f"Delta-V 플롯 생성 중 오류: {e}")
-    
+
+        if self._resume_enabled:
+            self._write_resume_state()
+
     def on_training_end(self):
         """학습 종료 시 최종 결과 저장"""
         if self.verbose > 0:
@@ -364,15 +377,119 @@ class EvasionTrackingCallback(BaseCallback):
         stats_path = os.path.join(self.log_dir, "evasion_stats.json")
         with open(stats_path, 'w') as f:
             json.dump(_json_ready(stats), f, indent=2)
-        
+
         if self.verbose > 0:
             print(f"학습 통계 저장: {stats_path}")
+
+        if self._resume_enabled:
+            self._write_resume_state()
+
+    def _restore_from_resume(self, data: Dict[str, Any]) -> None:
+        """저장된 상태로부터 내부 지표를 복원"""
+        try:
+            self.episode_count = int(data.get("episode_count", self.episode_count) or 0)
+        except (TypeError, ValueError):
+            self.episode_count = self.episode_count
+
+        self.success_rates = [float(x) for x in data.get("success_rates", self.success_rates)]
+        self.evader_rewards = [float(x) for x in data.get("evader_rewards", self.evader_rewards)]
+        self.pursuer_rewards = [float(x) for x in data.get("pursuer_rewards", self.pursuer_rewards)]
+        self.nash_equilibrium_metrics = [float(x) for x in data.get("nash_metrics", self.nash_equilibrium_metrics)]
+        self.buffer_time_stats = [float(x) for x in data.get("buffer_times", self.buffer_time_stats)]
+        self.evader_delta_vs = [float(x) for x in data.get("evader_delta_vs", self.evader_delta_vs)]
+
+        self.episodes_info = list(data.get("episodes_info", self.episodes_info))
+        self.outcomes = [info.get('outcome', 'unknown') for info in self.episodes_info]
+
+        self.captures = int(data.get("captures", self.captures) or self.captures)
+        self.evasions = int(data.get("evasions", self.evasions) or self.evasions)
+        self.permanent_evasions = int(data.get("permanent_evasions", self.permanent_evasions) or self.permanent_evasions)
+        self.conditional_evasions = int(data.get("conditional_evasions", self.conditional_evasions) or self.conditional_evasions)
+        self.temporary_evasions = int(data.get("temporary_evasions", self.temporary_evasions) or self.temporary_evasions)
+        self.fuel_depleted = int(data.get("fuel_depleted", self.fuel_depleted) or self.fuel_depleted)
+        self.max_steps = int(data.get("max_steps", self.max_steps) or self.max_steps)
+
+        outcome_counts = data.get("outcome_counts")
+        if isinstance(outcome_counts, dict):
+            self.captures = int(outcome_counts.get("captured", self.captures))
+            self.permanent_evasions = int(outcome_counts.get("permanent_evasion", self.permanent_evasions))
+            self.conditional_evasions = int(outcome_counts.get("conditional_evasion", self.conditional_evasions))
+            self.fuel_depleted = int(outcome_counts.get("fuel_depleted", self.fuel_depleted))
+            self.max_steps = int(outcome_counts.get("max_steps", self.max_steps))
+            self.evasions = int(data.get("evasions", self.permanent_evasions + self.conditional_evasions))
+
+        # 최근 성공/ΔV 기록 복원
+        recent_successes = data.get("recent_successes")
+        if not recent_successes and self.episodes_info:
+            recent_successes = [1 if info.get("success") else 0 for info in self.episodes_info][-self.success_window.maxlen:]
+
+        self.success_window = deque(maxlen=self.success_window.maxlen)
+        if recent_successes:
+            for flag in recent_successes[-self.success_window.maxlen:]:
+                try:
+                    self.success_window.append(int(flag))
+                except (TypeError, ValueError):
+                    continue
+        elif self.success_rates:
+            default_flag = 1 if self.success_rates[-1] >= 0.5 else 0
+            self.success_window.extend([default_flag] * min(len(self.success_rates), self.success_window.maxlen))
+
+        recent_delta_v = data.get("recent_delta_v")
+        if not recent_delta_v and self.evader_delta_vs:
+            recent_delta_v = self.evader_delta_vs[-self.delta_v_window.maxlen:]
+
+        self.delta_v_window = deque(maxlen=self.delta_v_window.maxlen)
+        if recent_delta_v:
+            for value in recent_delta_v[-self.delta_v_window.maxlen:]:
+                try:
+                    self.delta_v_window.append(float(value))
+                except (TypeError, ValueError):
+                    continue
+
+    def _write_resume_state(self) -> None:
+        """현재 상태를 JSON으로 저장하여 이어학습 시 활용"""
+        resume_data = {
+            "episode_count": self.episode_count,
+            "success_rates": self.success_rates,
+            "recent_successes": list(self.success_window),
+            "captures": self.captures,
+            "evasions": self.evasions,
+            "permanent_evasions": self.permanent_evasions,
+            "conditional_evasions": self.conditional_evasions,
+            "temporary_evasions": self.temporary_evasions,
+            "fuel_depleted": self.fuel_depleted,
+            "max_steps": self.max_steps,
+            "evader_rewards": self.evader_rewards,
+            "pursuer_rewards": self.pursuer_rewards,
+            "nash_metrics": self.nash_equilibrium_metrics,
+            "buffer_times": self.buffer_time_stats,
+            "evader_delta_vs": self.evader_delta_vs,
+            "recent_delta_v": list(self.delta_v_window),
+            "episodes_info": self.episodes_info[-100:],
+            "outcome_counts": {
+                "captured": self.captures,
+                "permanent_evasion": self.permanent_evasions,
+                "conditional_evasion": self.conditional_evasions,
+                "fuel_depleted": self.fuel_depleted,
+                "max_steps": self.max_steps,
+            },
+            "timestamp": datetime.datetime.now().isoformat(),
+        }
+
+        resume_path = os.path.join(self.log_dir, "resume_state.json")
+        try:
+            with open(resume_path, 'w') as f:
+                json.dump(_json_ready(resume_data), f, indent=2)
+        except Exception as exc:
+            if self.verbose > 0:
+                print(f"resume_state 저장 실패: {exc}")
 
 
 class PerformanceCallback(BaseCallback):
     """성능 추적 및 시각화 콜백"""
     
-    def __init__(self, log_dir: str, plot_freq: int = 100, verbose: int = 0):
+    def __init__(self, log_dir: str, plot_freq: int = 100, verbose: int = 0,
+                 resume: bool = False, resume_data: Optional[Dict[str, Any]] = None):
         super().__init__(verbose)
         self.log_dir = log_dir
         self.plot_freq = plot_freq
@@ -395,6 +512,9 @@ class PerformanceCallback(BaseCallback):
         # 윈도우 사이즈
         self.window_size = 100
         self.success_window = deque(maxlen=self.window_size)
+
+        if resume and resume_data:
+            self._restore_from_resume(resume_data)
 
     def _on_step(self) -> bool:
         dones = self.locals.get("dones", [False])
@@ -507,6 +627,45 @@ class PerformanceCallback(BaseCallback):
         
         if self.verbose > 0:
             print(f"최종 통계 저장: {stats_path}")
+
+    def _restore_from_resume(self, data: Dict[str, Any]) -> None:
+        """이전 학습 세션의 기록을 복원"""
+        self.success_rates = [float(x) for x in data.get("success_rates", self.success_rates)]
+        try:
+            self.episode_count = int(data.get("episode_count", len(self.success_rates)) or self.episode_count)
+        except (TypeError, ValueError):
+            self.episode_count = len(self.success_rates)
+
+        self.evader_rewards = [float(x) for x in data.get("evader_rewards", self.evader_rewards)]
+        self.pursuer_rewards = [float(x) for x in data.get("pursuer_rewards", self.pursuer_rewards)]
+        self.nash_metrics = [float(x) for x in data.get("nash_metrics", self.nash_metrics)]
+        self.buffer_times = [float(x) for x in data.get("buffer_times", self.buffer_times)]
+
+        outcome_counts = data.get("outcome_counts")
+        if isinstance(outcome_counts, dict):
+            normalized = Counter()
+            for key, value in outcome_counts.items():
+                try:
+                    normalized[key] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            if normalized:
+                self.outcome_counter = normalized
+
+        recent_successes = data.get("recent_successes")
+        if not recent_successes and data.get("episodes_info"):
+            recent_successes = [1 if info.get("success") else 0 for info in data["episodes_info"]][-self.window_size:]
+
+        self.success_window = deque(maxlen=self.window_size)
+        if recent_successes:
+            for flag in recent_successes[-self.window_size:]:
+                try:
+                    self.success_window.append(int(flag))
+                except (TypeError, ValueError):
+                    continue
+        elif self.success_rates:
+            default_flag = 1 if self.success_rates[-1] >= 0.5 else 0
+            self.success_window.extend([default_flag] * min(len(self.success_rates), self.window_size))
 
 
 class ModelSaveCallback(BaseCallback):
@@ -777,7 +936,8 @@ class DetailedAnalysisCallback(BaseCallback):
     """벡터 환경을 지원하는 상세 분석 콜백"""
     
     def __init__(self, plot_freq=1000, save_dir="./analysis_plots", 
-                 episode_plot_freq=100, verbose=1):
+                 episode_plot_freq=100, verbose=1,
+                 resume_data: Optional[Dict[str, Any]] = None):
         super().__init__(verbose)
         self.plot_freq = plot_freq
         self.save_dir = save_dir
@@ -788,6 +948,9 @@ class DetailedAnalysisCallback(BaseCallback):
         self.env_data = {}  # 각 환경별 데이터
         self.all_episodes_data = []  # 모든 환경의 모든 에피소드
         self.total_episode_count = 0  # 모든 환경의 총 에피소드 수
+
+        if resume_data:
+            self._restore_from_resume(resume_data)
         
     def _init_env_tracking(self, env_idx):
         """환경별 추적 데이터 초기화"""
@@ -1061,7 +1224,8 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.grid(True, alpha=0.3)
         
         plt.tight_layout()
-        plt.savefig(f'{self.save_dir}/episode_{episode_num}_details.png', dpi=150)
+        filename = f'episode_env_{env_id}_details.png'
+        plt.savefig(os.path.join(self.save_dir, filename), dpi=150)
         plt.close()
         
         if self.verbose:
@@ -1071,11 +1235,38 @@ class DetailedAnalysisCallback(BaseCallback):
             print(f"  - 게임 모드 스텝: {episode_data.get('game_mode_steps', 'N/A')} / {episode_data.get('total_steps', 'N/A')}")
             print(f"  - 총 Delta-V - 회피자: {episode_data['total_evader_dv']:.1f} m/s, 추격자: {episode_data['total_pursuer_dv']:.1f} m/s")
     
+    def _restore_from_resume(self, data: Dict[str, Any]) -> None:
+        """기존 분석 데이터를 복원"""
+        env_data = data.get('env_data')
+        if isinstance(env_data, dict):
+            restored_env = {}
+            for key, value in env_data.items():
+                try:
+                    env_id = int(key)
+                except (TypeError, ValueError):
+                    env_id = key
+                restored_env[env_id] = value
+            self.env_data = restored_env
+
+        episodes = data.get('all_episodes_data')
+        if isinstance(episodes, list):
+            self.all_episodes_data = episodes
+
+        try:
+            self.total_episode_count = int(data.get('total_episode_count', self.total_episode_count) or self.total_episode_count)
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            self.n_calls = int(data.get('total_steps', self.n_calls) or self.n_calls)
+        except (TypeError, ValueError):
+            pass
+
     def _generate_overall_plots(self):
         """전체 학습 과정 분석 플롯"""
         if len(self.all_episodes_data) < 2:
             return
-        
+
         # 1. 에피소드별 결과 요약
         self._plot_episode_summary()
         
@@ -1086,6 +1277,8 @@ class DetailedAnalysisCallback(BaseCallback):
             print(f"\n[Step {self.n_calls}] 전체 분석 플롯 생성 완료")
             print(f"  - 총 에피소드: {self.total_episode_count}")
             print(f"  - 환경 수: {len(self.env_data)}")
+
+        self._save_data()
     
     def _plot_episode_summary(self):
         """모든 환경의 에피소드별 요약 통계"""
@@ -1152,7 +1345,7 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.grid(True, alpha=0.3, axis='y')
         
         plt.tight_layout()
-        plt.savefig(f'{self.save_dir}/episode_summary_step_{self.n_calls}.png', dpi=150)
+        plt.savefig(f'{self.save_dir}/episode_summary.png', dpi=150)
         plt.close()
     
     def _plot_env_statistics(self):
@@ -1307,7 +1500,7 @@ class DetailedAnalysisCallback(BaseCallback):
                 fontfamily='monospace', bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
         
         plt.tight_layout()
-        plt.savefig(f'{self.save_dir}/env_statistics_step_{self.n_calls}.png', dpi=150)
+        plt.savefig(f'{self.save_dir}/env_statistics.png', dpi=150)
         plt.close()
     
     def on_training_end(self):
