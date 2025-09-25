@@ -28,6 +28,14 @@ class GASTMPropagator:
         # 행렬 캐시 (성능 최적화)
         self._matrix_cache = {}
         self._cache_time = None
+        # TV-LQR용 시퀀스 캐시 (슬라이딩 윈도우)
+        self._tvlqr_cache = {
+            "t0": None,
+            "dt": None,
+            "H": None,
+            "A_seq": None,
+            "B_seq": None,
+        }
 
     def _initialize_ga_stm(self, current_time: float):
         """GimAlfriendSTM 클래스 초기화"""
@@ -103,6 +111,105 @@ class GASTMPropagator:
         
         return Ak, Bk
 
+    def _reset_tvlqr_cache(self):
+        self._tvlqr_cache = {
+            "t0": None,
+            "dt": None,
+            "H": None,
+            "A_seq": None,
+            "B_seq": None,
+        }
+
+    def get_impulsive_AB_sequence(self, horizon: int, dt: float, current_time: float):
+        """Impulse 기반 TV-LQR를 위한 (Ak, B~k) 시퀀스를 생성한다.
+
+        Impulse는 각 스텝 시작에 속도 성분에 더해지며, 이후 Ak로 전파된다:
+            x_{k+1} = Ak x_k + (Ak G) v_k,  G = [0; I].
+
+        Args:
+            horizon: TV-LQR 스텝 수 (양수)
+            dt: 시간 간격 [s]
+            current_time: 시퀀스 시작 시간 [s]
+
+        Returns:
+            tuple (A_seq, B_seq)
+                A_seq: (H, 6, 6) array
+                B_seq: (H, 6, 3) array where B_seq[k] = Ak @ G
+        """
+        if horizon <= 0:
+            raise ValueError("horizon must be positive")
+
+        H = int(horizon)
+        dt = float(dt)
+        t0 = float(current_time)
+
+        cache = self._tvlqr_cache
+        same_grid = (
+            cache["A_seq"] is not None
+            and cache["B_seq"] is not None
+            and cache["H"] == H
+            and cache["dt"] == dt
+            and cache["t0"] is not None
+            and abs((cache["t0"] + dt) - t0) < 1e-9
+        )
+
+        perm = np.array([
+            [1, 0, 0, 0, 0, 0],
+            [0, 0, 0, 1, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 1, 0, 0, 0],
+            [0, 0, 0, 0, 0, 1],
+        ], dtype=float)
+        G = np.zeros((6, 3), dtype=float)
+        G[3:, :] = np.eye(3, dtype=float)
+
+        if same_grid:
+            A_seq_prev = cache["A_seq"]
+            B_seq_prev = cache["B_seq"]
+            A_seq = np.empty_like(A_seq_prev)
+            B_seq = np.empty_like(B_seq_prev)
+            A_seq[:-1] = A_seq_prev[1:]
+            B_seq[:-1] = B_seq_prev[1:]
+
+            self.ga_stm.dt = dt
+            self.ga_stm.t0 = t0 + (H - 1) * dt
+            self.ga_stm.tf = t0 + H * dt
+            self.ga_stm.makeTimeVector()
+            self.ga_stm.makeDiscreteMatrices()
+
+            Ak_last_int = self.ga_stm.Ak
+            if Ak_last_int is None or Ak_last_int.shape[2] == 0:
+                raise RuntimeError("Failed to build GA-STM matrix for TV-LQR")
+            Ak_last_std = perm.T @ Ak_last_int[:, :, -1] @ perm
+            A_seq[-1] = Ak_last_std
+            B_seq[-1] = Ak_last_std @ G
+        else:
+            self.ga_stm.dt = dt
+            self.ga_stm.t0 = t0
+            self.ga_stm.tf = t0 + H * dt
+            self.ga_stm.makeTimeVector()
+            self.ga_stm.makeDiscreteMatrices()
+
+            Ak_int = self.ga_stm.Ak
+            if Ak_int is None or Ak_int.shape[2] < H:
+                raise RuntimeError("GA-STM discrete matrices are not available for requested horizon")
+
+            A_seq = np.zeros((H, 6, 6), dtype=float)
+            for k in range(H):
+                A_seq[k] = perm.T @ Ak_int[:, :, k] @ perm
+            B_seq = np.einsum('kij,jm->kim', A_seq, G, optimize=True)
+
+        self._tvlqr_cache.update({
+            "t0": t0,
+            "dt": dt,
+            "H": H,
+            "A_seq": A_seq,
+            "B_seq": B_seq,
+        })
+
+        return A_seq, B_seq
+
     def propagate_with_control(self, control: np.ndarray, dt: float, 
                               current_time: float, current_state: np.ndarray = None) -> np.ndarray:
         """
@@ -155,6 +262,7 @@ class GASTMPropagator:
         self.chief_orbit = new_chief_orbit
         self.relative_state = current_relative_state
         self._matrix_cache.clear()  # 캐시 초기화
+        self._reset_tvlqr_cache()
         self._initialize_ga_stm(current_time)
 
     def get_state_transition_matrix(self, dt: float, current_time: float) -> np.ndarray:
@@ -203,4 +311,3 @@ class GASTMPropagator:
         if not np.isfinite(self.relative_state).all():
             raise FloatingPointError("GA-STM state became non-finite after impulse propagation")
         return self.relative_state
-
