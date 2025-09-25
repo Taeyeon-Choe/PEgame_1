@@ -228,6 +228,18 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
             outcome = "evaded" if res.get('success', False) else "captured"
             print(f"  테스트 {idx}: {outcome}")
 
+            total_steps = res.get('total_steps') or res.get('trajectory_length')
+            if total_steps is not None:
+                print(f"    총 스텝: {int(total_steps)}")
+
+            elapsed_minutes = res.get('elapsed_time_minutes')
+            if elapsed_minutes is None:
+                elapsed_seconds = res.get('elapsed_time_seconds')
+                if elapsed_seconds is not None:
+                    elapsed_minutes = elapsed_seconds / 60.0
+            if elapsed_minutes is not None:
+                print(f"    경과 시간: {elapsed_minutes:.2f} 분")
+
             pursuer_delta_v = res.get('pursuer_total_delta_v_ms')
             if pursuer_delta_v is not None:
                 print(f"    추격자 총 delta-v: {pursuer_delta_v:.2f} m/s")

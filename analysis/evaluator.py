@@ -202,12 +202,18 @@ class ModelEvaluator:
         
         # 결과 분석
         metrics = self.env.analyze_results(states, actions_e, actions_p)
-        
+
         # 추가 메트릭 계산
         additional_metrics = calculate_performance_metrics(
             states, actions_e, actions_p, rewards, info
         )
         metrics.update(additional_metrics)
+
+        # 시뮬레이션 진행 정보
+        elapsed_time_sec = float(times[-1]) if len(times) > 0 else step_count * getattr(self.env, "dt", 0.0)
+        metrics['total_steps'] = step_count
+        metrics['elapsed_time_seconds'] = elapsed_time_sec
+        metrics['elapsed_time_minutes'] = elapsed_time_sec / 60.0 if elapsed_time_sec else 0.0
 
         # 궤적 품질 분석
         trajectory_quality = analyze_trajectory_quality(states, actions_e)
