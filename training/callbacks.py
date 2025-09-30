@@ -13,9 +13,13 @@ from collections import deque, Counter
 from stable_baselines3.common.callbacks import BaseCallback
 import torch
 from orbital_mechanics.coordinate_transforms import lvlh_to_eci
-from analysis.visualization import plot_eci_trajectories
+from analysis.visualization import (
+    plot_eci_trajectories,
+    plot_training_progress,
+    plot_delta_v_per_episode,
+    aggregate_outcome_counts,
+)
 from utils.constants import ANALYSIS_PARAMS
-from analysis.visualization import plot_training_progress, plot_delta_v_per_episode
 
 
 def _json_ready(value):
@@ -212,10 +216,12 @@ class EvasionTrackingCallback(BaseCallback):
             self.evasions += 1
         elif 'temporary_evasion' in outcome:
             self.temporary_evasions += 1
+            self.evasions += 1
         elif 'fuel_depleted' in outcome:
             self.fuel_depleted += 1
         elif 'max_steps' in outcome:
             self.max_steps += 1
+            self.evasions += 1
 
     def _extract_total_delta_v(self, info, termination_details):
         """에피소드 전체 Delta-V 추출"""
@@ -245,6 +251,25 @@ class EvasionTrackingCallback(BaseCallback):
         print(f"  - 결과 분포: 포획={self.captures}, 영구회피={self.permanent_evasions}, "
               f"조건부회피={self.conditional_evasions}, 임시회피={self.temporary_evasions}, "
               f"연료소진={self.fuel_depleted}, 최대스텝={self.max_steps}")
+
+        macro_counts = aggregate_outcome_counts({
+            'captured': self.captures,
+            'permanent_evasion': self.permanent_evasions,
+            'conditional_evasion': self.conditional_evasions,
+            'temporary_evasion': self.temporary_evasions,
+            'fuel_depleted': self.fuel_depleted,
+            'max_steps_reached': self.max_steps,
+        })
+        if macro_counts:
+            total_macro = max(sum(macro_counts.values()), 1)
+            captured_macro = macro_counts.get('Captured', 0)
+            evaded_macro = macro_counts.get('Evaded (incl. max steps)', macro_counts.get('Evaded', 0))
+            print(f"  - 대분류: Captured={captured_macro} ({captured_macro/total_macro:.1%}), "
+                  f"Evaded={evaded_macro} ({evaded_macro/total_macro:.1%})")
+            if 'Fuel Depleted' in macro_counts:
+                print(f"    · Fuel depleted: {macro_counts['Fuel Depleted']}")
+            if 'Other' in macro_counts:
+                print(f"    · Other: {macro_counts['Other']}")
 
         # 버퍼 시간 통계
         if self.buffer_time_stats:
@@ -322,7 +347,15 @@ class EvasionTrackingCallback(BaseCallback):
             self.fuel_depleted,
             self.max_steps
         ]
-        
+        macro_counts = aggregate_outcome_counts({
+            'captured': self.captures,
+            'permanent_evasion': self.permanent_evasions,
+            'conditional_evasion': self.conditional_evasions,
+            'temporary_evasion': self.temporary_evasions,
+            'fuel_depleted': self.fuel_depleted,
+            'max_steps_reached': self.max_steps,
+        })
+
         try:
             plot_training_progress(
                 success_rates=self.success_rates,
@@ -332,7 +365,8 @@ class EvasionTrackingCallback(BaseCallback):
                 nash_metrics=self.nash_equilibrium_metrics,
                 buffer_times=[_json_ready(bt) for bt in self.buffer_time_stats],
                 episode_count=self.episode_count,
-                save_dir=self.log_dir
+                save_dir=self.log_dir,
+                macro_counts=macro_counts,
             )
         except Exception as e:
             if self.verbose > 0:
@@ -516,6 +550,12 @@ class PerformanceCallback(BaseCallback):
         if resume and resume_data:
             self._restore_from_resume(resume_data)
 
+    def _macro_outcome_counts(self) -> Dict[str, int]:
+        if not self.outcome_counter:
+            return {}
+        raw = {str(key): int(value) for key, value in self.outcome_counter.items()}
+        return aggregate_outcome_counts(raw)
+
     def _on_step(self) -> bool:
         dones = self.locals.get("dones", [False])
         infos = self.locals.get("infos", [{}])
@@ -575,6 +615,19 @@ class PerformanceCallback(BaseCallback):
                 print(f"  성공률(최근 {len(self.success_window)}): {success_rate:.1%}")
                 print(f"  Nash 메트릭: {self.nash_metrics[-1]:.3f}")
                 print(f"  타임스텝: {self.num_timesteps}")
+                macro_counts = self._macro_outcome_counts()
+                if macro_counts:
+                    total_macro = max(sum(macro_counts.values()), 1)
+                    captured_macro = macro_counts.get('Captured', 0)
+                    evaded_macro = macro_counts.get('Evaded (incl. max steps)', macro_counts.get('Evaded', 0))
+                    print(
+                        "  대분류 누적: Captured={0} ({1:.1%}), Evaded={2} ({3:.1%})".format(
+                            captured_macro,
+                            captured_macro / total_macro,
+                            evaded_macro,
+                            evaded_macro / total_macro,
+                        )
+                    )
 
             if self.episode_count % self.plot_freq == 0:
                 self._save_plots()
@@ -584,6 +637,7 @@ class PerformanceCallback(BaseCallback):
     def _save_plots(self):
         """플롯 저장"""
         try:
+            macro_counts = self._macro_outcome_counts()
             plot_training_progress(
                 success_rates=self.success_rates,
                 outcome_counts=[
@@ -598,7 +652,8 @@ class PerformanceCallback(BaseCallback):
                 nash_metrics=self.nash_metrics,
                 buffer_times=self.buffer_times,
                 episode_count=self.episode_count,
-                save_dir=self.plot_dir
+                save_dir=self.plot_dir,
+                macro_counts=macro_counts,
             )
             
             if self.verbose > 0:
@@ -615,6 +670,13 @@ class PerformanceCallback(BaseCallback):
             "average_reward": float(np.mean(self.episode_rewards)) if self.episode_rewards else 0.0,
             "final_nash_metric": float(self.nash_metrics[-1]) if self.nash_metrics else 0.0,
         }
+
+        macro_counts = {
+            key: int(value)
+            for key, value in self._macro_outcome_counts().items()
+        }
+        if macro_counts:
+            stats["macro_outcomes"] = macro_counts
         
         # JSON으로 저장
         import json
@@ -1365,11 +1427,12 @@ class DetailedAnalysisCallback(BaseCallback):
         for ep in self.all_episodes_data:
             outcome = ep['outcome']
             env_id = ep['env_id']
-            if 'captured' in outcome.lower():
+            outcome_lower = outcome.lower()
+            if 'captur' in outcome_lower:
                 env_outcomes[env_id]['captured'] += 1
-            elif 'evaded' in outcome.lower() or 'evasion' in outcome.lower():
+            elif any(tag in outcome_lower for tag in ('evaded', 'evasion', 'max_steps')):
                 env_outcomes[env_id]['evaded'] += 1
-            elif 'fuel' in outcome.lower():
+            elif 'fuel' in outcome_lower:
                 env_outcomes[env_id]['fuel_depleted'] += 1
             else:
                 env_outcomes[env_id]['other'] += 1
@@ -1457,7 +1520,11 @@ class DetailedAnalysisCallback(BaseCallback):
         for env_id in env_ids:
             env_episodes = [ep for ep in self.all_episodes_data if ep['env_id'] == env_id]
             if env_episodes:
-                successes = sum(1 for ep in env_episodes if 'evaded' in ep['outcome'].lower() or 'evasion' in ep['outcome'].lower())
+                successes = sum(
+                    1
+                    for ep in env_episodes
+                    if any(tag in ep['outcome'].lower() for tag in ('evaded', 'evasion', 'max_steps'))
+                )
                 success_rate = successes / len(env_episodes) if env_episodes else 0
                 success_rates.append(success_rate)
                 avg_dvs.append(avg_evader_dv.get(env_id, 0))

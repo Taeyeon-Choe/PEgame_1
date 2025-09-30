@@ -15,6 +15,7 @@ from analysis.visualization import (
     create_summary_dashboard,
     plot_eci_trajectories,
     plot_delta_v_components,
+    aggregate_outcome_counts,
 )
 from analysis.metrics import calculate_performance_metrics, analyze_trajectory_quality
 from orbital_mechanics.coordinate_transforms import lvlh_to_eci
@@ -209,6 +210,24 @@ class ModelEvaluator:
         )
         metrics.update(additional_metrics)
 
+        termination_type = info.get('termination_type') or info.get('outcome')
+        if termination_type:
+            termination_str = str(termination_type)
+            metrics['outcome'] = termination_str
+            metrics['termination_type'] = termination_str
+
+            outcome_lower = termination_str.lower()
+            reached_max_steps = 'max_step' in outcome_lower
+            if reached_max_steps:
+                metrics['max_steps_reached'] = True
+
+            evaded_keywords = ('evasion', 'evaded')
+            is_evaded = any(keyword in outcome_lower for keyword in evaded_keywords)
+            if reached_max_steps or is_evaded:
+                metrics['success'] = True
+
+            metrics['success_category'] = 'evaded' if metrics.get('success') else 'failure'
+
         # 시뮬레이션 진행 정보
         elapsed_time_sec = float(times[-1]) if len(times) > 0 else step_count * getattr(self.env, "dt", 0.0)
         metrics['total_steps'] = step_count
@@ -342,7 +361,17 @@ class ModelEvaluator:
             'zero_sum_metrics': zero_sum_metrics,
             'individual_results': results
         }
-        
+
+        macro_counts = aggregate_outcome_counts(outcome_types)
+        if macro_counts:
+            comprehensive_results['macro_outcome_distribution'] = macro_counts
+            comprehensive_results['summary']['captured_macro'] = macro_counts.get('Captured', 0)
+            comprehensive_results['summary']['evaded_macro'] = macro_counts.get(
+                'Evaded (incl. max steps)',
+                macro_counts.get('Evaded', 0),
+            )
+            comprehensive_results['summary']['max_steps_cases'] = macro_counts.get('Max Steps', 0)
+
         return comprehensive_results
     
     def _save_scenario_trajectory(self, scenario_result: Dict, 
@@ -414,7 +443,14 @@ class ModelEvaluator:
         self._save_zero_sum_metrics(zero_sum_metrics, save_dir)
         
         # 4. 시각화 생성
-        plot_test_results(results, zero_sum_metrics, outcome_types, save_dir)
+        macro_counts = comprehensive_results.get('macro_outcome_distribution')
+        plot_test_results(
+            results,
+            zero_sum_metrics,
+            outcome_types,
+            save_dir,
+            macro_counts=macro_counts,
+        )
         
         # 5. 대시보드 생성
         training_stats = getattr(self, 'training_stats', {})
@@ -450,7 +486,24 @@ class ModelEvaluator:
             f.write(f"총 테스트 수: {summary['total_tests']}\n")
             f.write(f"성공 횟수: {summary['success_count']}\n")
             f.write(f"성공률: {summary['success_rate']:.1f}%\n\n")
-            
+
+            macro = results.get('macro_outcome_distribution', {})
+            if macro:
+                captured_macro = macro.get('Captured', 0)
+                evaded_macro = macro.get('Evaded (incl. max steps)', macro.get('Evaded', 0))
+                max_steps_cases = macro.get('Max Steps', 0)
+
+                f.write("=== 대분류 결과 ===\n")
+                f.write(f"Captured: {captured_macro}\n")
+                f.write(f"Evaded (incl. max steps): {evaded_macro}\n")
+                if 'Fuel Depleted' in macro:
+                    f.write(f"Fuel Depleted: {macro['Fuel Depleted']}\n")
+                if 'Other' in macro:
+                    f.write(f"Other: {macro['Other']}\n")
+                if max_steps_cases:
+                    f.write(f" └ Max Steps 포함: {max_steps_cases}\n")
+                f.write("\n")
+
             f.write("=== 성능 지표 ===\n")
             f.write(f"평균 최종 거리: {summary['avg_final_distance']:.2f} m\n")
             f.write(f"평균 회피자 delta-v: {summary['avg_evader_delta_v']:.2f} m/s\n")

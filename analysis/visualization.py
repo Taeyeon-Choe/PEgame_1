@@ -74,6 +74,60 @@ def save_data_to_csv(data: Dict[str, List], filepath: str):
             writer.writerow(row)
 
 
+def aggregate_outcome_counts(outcome_counts: Dict[str, Any]) -> Dict[str, int]:
+    """세부 결과 카운트를 대분류 지표로 집계한다."""
+    if not outcome_counts:
+        return {}
+
+    normalized: Dict[str, int] = {}
+    for raw_key, raw_value in outcome_counts.items():
+        if raw_key is None:
+            continue
+        try:
+            count = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        key = str(raw_key).lower().strip()
+        if not key:
+            continue
+        normalized[key] = normalized.get(key, 0) + max(count, 0)
+
+    if not normalized:
+        return {}
+
+    total = sum(normalized.values())
+
+    def _sum_if(*substrings: str) -> int:
+        return sum(
+            value
+            for name, value in normalized.items()
+            if all(substr in name for substr in substrings)
+        )
+
+    captured = _sum_if('captur')
+    evaded = _sum_if('evas')
+    max_steps = _sum_if('max_step') + _sum_if('maxstep')
+    fuel_depleted = _sum_if('fuel', 'deplet')
+
+    other = total - (captured + evaded + max_steps + fuel_depleted)
+    other = max(other, 0)
+
+    aggregated: Dict[str, int] = {
+        'Captured': captured,
+        'Evaded': evaded,
+        'Evaded (incl. max steps)': evaded + max_steps,
+    }
+
+    if max_steps > 0:
+        aggregated['Max Steps'] = max_steps
+    if fuel_depleted > 0:
+        aggregated['Fuel Depleted'] = fuel_depleted
+    if other > 0:
+        aggregated['Other'] = other
+
+    return aggregated
+
+
 def plot_training_progress(success_rates: List[float],
                           outcome_counts: List[int],
                           evader_rewards: List[float],
@@ -81,7 +135,8 @@ def plot_training_progress(success_rates: List[float],
                           nash_metrics: List[float],
                           buffer_times: List[float],
                           episode_count: int,
-                          save_dir: str):
+                          save_dir: str,
+                          macro_counts: Optional[Dict[str, int]] = None):
     """학습 진행 상황 시각화"""
     setup_matplotlib()
     
@@ -141,7 +196,42 @@ def plot_training_progress(success_rates: List[float],
             outcome_data = {label: count for label, count in zip(filtered_labels, filtered_counts)}
             with open(f'{save_dir}/outcome_distribution.json', 'w') as f:
                 json.dump(_json_ready(outcome_data), f, indent=2)
-    
+
+    # 2-b. 대분류 결과 바 차트 (max_steps 회피 포함)
+    if macro_counts:
+        preferred_order = [
+            'Captured',
+            'Evaded (incl. max steps)',
+            'Evaded',
+            'Max Steps',
+            'Fuel Depleted',
+            'Other'
+        ]
+        ordered_labels = [label for label in preferred_order if label in macro_counts]
+        for label in macro_counts:
+            if label not in ordered_labels:
+                ordered_labels.append(label)
+
+        if ordered_labels:
+            values = [macro_counts[label] for label in ordered_labels]
+            plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+            bars = plt.bar(ordered_labels, values, color=plt.cm.Paired(np.linspace(0, 1, len(ordered_labels))))
+            plt.title(f'Macro Outcome Distribution (Episode {episode_count})')
+            plt.ylabel('Count')
+            plt.grid(True, axis='y', alpha=0.3)
+            plt.xticks(rotation=20)
+
+            for bar, value in zip(bars, values):
+                plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                         f'{value}', ha='center', va='bottom')
+
+            plt.tight_layout()
+            plt.savefig(f'{save_dir}/macro_outcome_distribution.png', dpi=PLOT_PARAMS['dpi'])
+            plt.close()
+
+            with open(f'{save_dir}/macro_outcome_distribution.json', 'w') as f:
+                json.dump(_json_ready(macro_counts), f, indent=2)
+
     # 3. Zero-Sum 게임 보상 그래프
     if len(evader_rewards) > 100:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
@@ -238,9 +328,10 @@ def plot_training_progress(success_rates: List[float],
         'evader_rewards': evader_rewards[-1000:] if len(evader_rewards) > 1000 else evader_rewards,  # 최근 1000개만
         'pursuer_rewards': pursuer_rewards[-1000:] if len(pursuer_rewards) > 1000 else pursuer_rewards,
         'nash_metrics': nash_metrics,
-        'buffer_times': buffer_times
+        'buffer_times': buffer_times,
+        'macro_counts': macro_counts
     }
-    
+
     with open(f'{save_dir}/training_progress.json', 'w') as f:
         json.dump(_json_ready(all_training_data), f, indent=2)
 
@@ -526,7 +617,8 @@ def plot_distance_evolution(states: np.ndarray, save_path: Optional[str] = None)
 def plot_test_results(results: List[Dict], 
                      zero_sum_metrics: Dict,
                      outcome_types: Dict,
-                     save_dir: Optional[str] = None):
+                     save_dir: Optional[str] = None,
+                     macro_counts: Optional[Dict[str, int]] = None):
     """테스트 결과 시각화"""
     setup_matplotlib()
     
@@ -574,6 +666,40 @@ def plot_test_results(results: List[Dict],
     
     # 2. 종료 조건 분포 파이 차트
     plot_outcome_distribution(outcome_types, save_dir)
+
+    if macro_counts:
+        preferred_order = [
+            'Captured',
+            'Evaded (incl. max steps)',
+            'Evaded',
+            'Max Steps',
+            'Fuel Depleted',
+            'Other'
+        ]
+        ordered_labels = [label for label in preferred_order if label in macro_counts]
+        for label in macro_counts:
+            if label not in ordered_labels:
+                ordered_labels.append(label)
+
+        if ordered_labels:
+            values = [macro_counts[label] for label in ordered_labels]
+            plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+            bars = plt.bar(ordered_labels, values, color=plt.cm.Pastel1(np.linspace(0, 1, len(ordered_labels))))
+            plt.title('Macro Outcome Distribution (Test)')
+            plt.ylabel('Count')
+            plt.grid(True, axis='y', alpha=0.3)
+            plt.xticks(rotation=20)
+
+            for bar, value in zip(bars, values):
+                plt.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                         f'{value}', ha='center', va='bottom')
+
+            plt.tight_layout()
+            if save_dir:
+                plt.savefig(f"{save_dir}/macro_outcome_distribution.png", dpi=PLOT_PARAMS['dpi'])
+                with open(f"{save_dir}/macro_outcome_distribution.json", 'w') as f:
+                    json.dump(_json_ready(macro_counts), f, indent=2)
+            plt.close()
     
     # 3. Zero-Sum 게임 메트릭 그래프들
     if zero_sum_metrics:
