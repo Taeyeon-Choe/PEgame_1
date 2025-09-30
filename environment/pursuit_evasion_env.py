@@ -261,6 +261,11 @@ class PursuitEvasionEnv(gym.Env):
         self.orbit_time_tracker = 0
         self.complete_orbits = 0
 
+        # LQ 보상 계산용 상태
+        self._prev_state = None
+        self._last_evader_dv = np.zeros(3, dtype=np.float64)
+        self._last_pursuer_dv = np.zeros(3, dtype=np.float64)
+
     def _init_pursuer_strategy(self):
         """지능형 추격자 전략 초기화"""
         self.pursuer_strategy_history = deque(maxlen=100)
@@ -358,6 +363,9 @@ class PursuitEvasionEnv(gym.Env):
         self.step_count = 0
         self.t = 0
         self.total_delta_v_e = 0
+        self._prev_state = None
+        self._last_evader_dv.fill(0.0)
+        self._last_pursuer_dv.fill(0.0)
         self.reward_history = []
         self.final_relative_distance = None
 
@@ -496,22 +504,26 @@ class PursuitEvasionEnv(gym.Env):
     def step(
         self, normalized_action_e: np.ndarray
     ) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """환경 스텝 실행 - 수정된 버전"""
-        # 스텝 시작 시 현재 연료 사용량 저장 (delta-v 계산용)
+        """환경 스텝 실행"""
         normalized_action_e = np.asarray(normalized_action_e, dtype=np.float32)
-        # 정규화된 액션을 실제 delta-v로 변환
-        action_e = self._denormalize_action(normalized_action_e)
 
-        # NaN 체크
+        # 스텝 시작 상태(x_k) 캐시
+        if self.state is not None:
+            self._prev_state = np.asarray(self.state, dtype=np.float64).copy()
+        else:
+            self._prev_state = None
+
+        # 정규화 액션 → 실제 delta-v
+        action_e = self._denormalize_action(normalized_action_e)
         if np.isnan(action_e).any():
             if self.debug_mode:
                 print(f"WARNING: action_e에 NaN 값 감지됨: {action_e}")
             action_e = np.zeros_like(action_e)
 
-        # delta-v 적용
-        delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
+        delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax).astype(np.float32, copy=False)
         delta_v_e_mag = float(np.linalg.norm(delta_v_e))
         self.total_delta_v_e += delta_v_e_mag
+        self._last_evader_dv = np.asarray(delta_v_e, dtype=np.float64)
 
         # 추격자 행동 결정
         if self.step_count % self.k == 0:
@@ -521,25 +533,21 @@ class PursuitEvasionEnv(gym.Env):
             self.pursuer_action_history.append(delta_v_p.copy())
         else:
             delta_v_p = np.zeros(3, dtype=np.float32)
+        self._last_pursuer_dv = np.asarray(delta_v_p, dtype=np.float64)
 
-        # 실제 이번 스텝의 delta-v 기록 (중요!)
-        actual_evader_dv = delta_v_e_mag  # 실제 적용된 값
-        actual_pursuer_dv = float(np.linalg.norm(delta_v_p))  # 실제 적용된 값
-
-        # 궤도 업데이트 및 시뮬레이션 (기존 코드와 동일)
+        # 궤도 업데이트 및 시뮬레이션
         if np.any(delta_v_e != 0):
             self._apply_evader_delta_v(delta_v_e)
 
-        if np.any(delta_v_p != 0):
-            self.state[3:] += delta_v_p
+        self._apply_pursuer_delta_v(delta_v_p)
 
         self._simulate_relative_motion()
         self.state = np.asarray(self.state, dtype=np.float32)
-    
+
         # 시간 및 스텝 업데이트
         self.t += self.dt
         self.step_count += 1
-        
+
         # 궤도 주기 추적
         self.orbit_time_tracker += self.dt
         if self.orbital_period > 0 and self.orbit_time_tracker >= self.orbital_period:
@@ -550,91 +558,77 @@ class PursuitEvasionEnv(gym.Env):
 
         # 종료 조건 확인
         terminated, truncated, termination_info = self.check_orbital_period_termination()
+        done = terminated or truncated
 
         # 보상 계산
-        done = terminated or truncated
         evader_reward, pursuer_reward, info = self._calculate_rewards(
             done, termination_info, delta_v_e_mag
         )
-    
-        # Nash Equilibrium 메트릭 업데이트
+        if info is None:
+            info = {}
+
+        # Nash Equilibrium 메트릭 업데이트 및 기록
         self._update_nash_metric()
-    
-        # 보상 히스토리 저장
         self.reward_history.append({"evader": evader_reward, "pursuer": pursuer_reward})
-    
+
         # 관측값 생성
         observed_state = self.observe(self.state)
         normalized_obs = self._normalize_obs(observed_state, self.pursuer_last_action)
-    
-        # ========== 수정된 부분: 실제 delta-v 값 사용 ==========
-        # 현재 상태 정보
+
+        # 정보 업데이트 (실제 적용 Δv 및 상태)
+        evader_dv_norm = float(np.linalg.norm(self._last_evader_dv))
+        pursuer_dv_norm = float(np.linalg.norm(self._last_pursuer_dv))
         current_relative_distance = float(np.linalg.norm(self.state[:3]))
-        
-        # 기존 info 업데이트
+
         info.update({
-            # 콜백이 기대하는 키들 - 실제 적용된 delta-v 사용
             "relative_distance_m": current_relative_distance,
-            "evader_dv_magnitude": actual_evader_dv,  # 수정: 실제 값 사용
-            "pursuer_dv_magnitude": actual_pursuer_dv,  # 수정: 실제 값 사용
+            "evader_dv_magnitude": evader_dv_norm,
+            "pursuer_dv_magnitude": pursuer_dv_norm,
             "relative_state": self.state.copy(),
             "relative_position_m": self.state[:3].copy(),
             "relative_velocity_mps": self.state[3:].copy(),
-            "evader_delta_v_vector": delta_v_e.astype(np.float32).copy().tolist(),
-            "pursuer_delta_v_vector": delta_v_p.astype(np.float32).copy().tolist(),
-
-            # 추가 유용한 정보
+            "evader_delta_v_vector": self._last_evader_dv.astype(np.float32, copy=False).tolist(),
+            "pursuer_delta_v_vector": self._last_pursuer_dv.astype(np.float32, copy=False).tolist(),
             "total_evader_delta_v": self.total_delta_v_e,
             "remaining_fuel": self.max_delta_v_budget - self.total_delta_v_e,
             "fuel_fraction_used": self.total_delta_v_e / self.max_delta_v_budget,
             "simulation_time_s": float(self.t),
             "time_step_index": int(self.step_count),
-
-            # 기존 정보들도 유지
             "nash_metric": self.nash_metric,
             "evader_delta_v_sum": self.delta_v_e_sum.copy(),
             "evader_impulse_count": len(self.evader_impulse_history),
             "complete_orbits": self.complete_orbits,
             "orbital_phase": self.orbit_time_tracker / self.orbital_period if self.orbital_period > 0 else 0.0,
-            
-            # 추가 정보
-            "pursuer_action_step": self.step_count % self.k == 0,  # 추격자가 행동한 스텝인지
+            "pursuer_action_step": self.step_count % self.k == 0,
         })
-    
-        # 종료 시 추가 정보
-        if "outcome" in termination_info:
-            info["termination_type"] = termination_info["outcome"]
-            info["outcome"] = termination_info["outcome"]  # 콜백 호환성
+
+        if termination_info:
+            outcome = termination_info.get("outcome")
+            if outcome is not None:
+                info["termination_type"] = outcome
+                info["outcome"] = outcome
             if "buffer_time" in termination_info:
                 info["buffer_time"] = termination_info["buffer_time"]
             if "orbit_consistency" in termination_info:
                 info["orbit_consistency"] = termination_info["orbit_consistency"]
 
         if done:
-            # 최종 상대거리 저장
             self.final_relative_distance = current_relative_distance
-            
-            # 종료 정보 업데이트
             info.update({
-                # 기본 종료 정보
                 "outcome": termination_info.get("outcome", "unknown"),
                 "termination_details": termination_info,
-                
-                # 궤도 정보
                 "initial_evader_orbital_elements": self.initial_evader_orbital_elements,
                 "initial_pursuer_orbital_elements": self.initial_pursuer_orbital_elements,
                 "initial_relative_distance": self.initial_relative_distance,
                 "final_relative_distance": self.final_relative_distance,
-                
-                # 보상 정보
                 "evader_reward": evader_reward,
                 "pursuer_reward": pursuer_reward,
                 "episode": {
-                    "r": evader_reward,  # 총 보상
-                    "l": self.step_count,  # 에피소드 길이
-                }
+                    "r": evader_reward,
+                    "l": self.step_count,
+                },
             })
-    
+
         return normalized_obs.astype(np.float32, copy=False), evader_reward, terminated, truncated, info
 
     def _apply_evader_delta_v(self, delta_v_e: np.ndarray):
@@ -744,6 +738,15 @@ class PursuitEvasionEnv(gym.Env):
             print(
                 f"  추격자 경사각: {pursuer_elements[2]*180/np.pi:.6f}° (변화 없어야 함)"
             )
+
+    def _apply_pursuer_delta_v(self, delta_v_p: np.ndarray):
+        """추격자 델타-V를 상태에 반영"""
+        if delta_v_p is None:
+            return
+        delta_v_p = np.asarray(delta_v_p, dtype=np.float32)
+        if not np.any(delta_v_p != 0):
+            return
+        self.state[3:] += delta_v_p
 
 
     def _rk4_step(self):
@@ -992,13 +995,17 @@ class PursuitEvasionEnv(gym.Env):
         }
 
     def _calculate_rewards(self, done: bool, termination_info: Dict, delta_v_e_mag: float) -> Tuple[float, float, Dict]:
-        """보상 계산 - 연료 효율성 강조"""
+        """보상 계산"""
+        reward_mode = getattr(self.config, "reward_mode", "original")
+        if reward_mode in ("lq_zero_sum", "lq_zero_sum_shaped"):
+            shaped = reward_mode == "lq_zero_sum_shaped"
+            return self._calculate_rewards_lq(done, termination_info, shaped)
+
+        # ===== 기존 보상 =====
         if done:
             evader_reward = termination_info["evader_reward"]
             pursuer_reward = termination_info["pursuer_reward"]
-            # dict 복사(원본 변형 방지)
             info = dict(termination_info)
-            # 최종/초기 상대거리 일관되게 노출
             self.final_relative_distance = float(np.linalg.norm(self.state[:3]))
             info['final_distance'] = self.final_relative_distance
             info.setdefault('final_relative_distance', self.final_relative_distance)
@@ -1006,12 +1013,9 @@ class PursuitEvasionEnv(gym.Env):
                 info['initial_relative_distance'] = float(self.initial_relative_distance)
         else:
             rho_mag = np.linalg.norm(self.state[:3])
-            
-            # 거리 보상
             normalized_distance = min(rho_mag / self.capture_distance, 100)
             distance_reward = 0.01 * normalized_distance
 
-            # 속도 방향 보상
             v_rel = self.state[3:6]
             v_rel_mag = np.linalg.norm(v_rel)
             if v_rel_mag > 0 and rho_mag > 0:
@@ -1022,30 +1026,117 @@ class PursuitEvasionEnv(gym.Env):
             else:
                 tangential_reward = 0
 
-            # 제어 비용 (증가)
             control_cost = self.c * delta_v_e_mag
-
-            # 연료 보존 보너스 추가
             fuel_remaining = self.max_delta_v_budget - self.total_delta_v_e
             fuel_bonus = 0.001 * fuel_remaining if fuel_remaining > 0 else 0
 
-            # 회피 보너스
             dodge_bonus = 0
             if self.step_count % self.k == 0 and rho_mag > self.capture_distance * 3:
                 dodge_bonus = 0.1
 
             evader_reward = (
-                distance_reward + tangential_reward - control_cost + 
+                distance_reward + tangential_reward - control_cost +
                 fuel_bonus + dodge_bonus
             )
             pursuer_reward = -evader_reward
 
             info = {
-                "evader_reward": evader_reward, 
+                "evader_reward": evader_reward,
                 "pursuer_reward": pursuer_reward,
             }
-        
+
         return evader_reward, pursuer_reward, info
+
+    def _calculate_rewards_lq(self, done: bool, termination_info: Dict, shaped: bool) -> Tuple[float, float, Dict]:
+        """LQ 제로섬 보상 + 선택적 shaping"""
+        termination_info = termination_info or {}
+
+        x_k = self._prev_state
+        if x_k is None:
+            x_k = np.asarray(self.state, dtype=np.float64)
+        else:
+            x_k = np.asarray(x_k, dtype=np.float64)
+        x_k1 = np.asarray(self.state, dtype=np.float64)
+
+        uP_k = np.asarray(self._last_pursuer_dv, dtype=np.float64).reshape(3)
+        uE_k = np.asarray(self._last_evader_dv, dtype=np.float64).reshape(3)
+
+        Q = np.diag(np.asarray(self.config.lqr_Q_diag, dtype=np.float64))
+        QN = np.diag(np.asarray(self.config.lqr_QN_diag, dtype=np.float64))
+        RP = np.diag(np.asarray(self.config.lqr_R_diag, dtype=np.float64))
+        re_diag = getattr(self.config, "lqr_RE_diag", self.config.lqr_R_diag)
+        RE = np.diag(np.asarray(re_diag, dtype=np.float64))
+
+        state_cost = float(x_k.T @ Q @ x_k)
+        pursuer_control_cost = float(uP_k.T @ RP @ uP_k)
+        evader_control_penalty = float(uE_k.T @ RE @ uE_k)
+        stage_cost = state_cost + pursuer_control_cost - evader_control_penalty
+
+        rE = stage_cost
+        rP = -stage_cost
+
+        info = dict(termination_info) if done else {}
+        info.update({
+            "Jp_stage": state_cost + pursuer_control_cost,
+            "Je_stage": evader_control_penalty,
+            "stage_cost": stage_cost,
+        })
+
+        terminal_cost = 0.0
+        if done:
+            terminal_cost = float(x_k1.T @ QN @ x_k1)
+            rE += terminal_cost
+            rP -= terminal_cost
+        info["terminal_cost"] = terminal_cost
+
+        event_constant = 0.0
+        if done and termination_info:
+            evt_e = float(termination_info.get("evader_reward", 0.0))
+            evt_p = float(termination_info.get("pursuer_reward", 0.0))
+            if math.isfinite(evt_e) and math.isfinite(evt_p):
+                event_constant = 0.5 * (evt_e - evt_p)
+                rE += event_constant
+                rP -= event_constant
+        info["event_constant"] = event_constant
+
+        dphi = 0.0
+        if shaped:
+            gamma = float(getattr(self.config, "reward_gamma", 1.0))
+            alpha_d, alpha_theta = getattr(self.config, "shape_alphas", [0.01, 0.005])
+            d_cap = float(getattr(self.config, "capture_distance", getattr(self.config, "capture_radius", 1.0)))
+
+            def _potential(rho_vec: np.ndarray, v_rel_vec: np.ndarray) -> float:
+                rho_norm = np.linalg.norm(rho_vec)
+                v_rel_norm = np.linalg.norm(v_rel_vec)
+                if d_cap <= 0:
+                    d_scale = 0.0
+                else:
+                    d_scale = rho_norm / d_cap
+
+                if rho_norm < 1e-12 or v_rel_norm < 1e-12:
+                    sin_term = 0.0
+                else:
+                    cross_mag = np.linalg.norm(np.cross(rho_vec, v_rel_vec))
+                    sin_term = np.clip(cross_mag / (rho_norm * v_rel_norm), -1.0, 1.0)
+                return alpha_d * d_scale + alpha_theta * sin_term
+
+            phi_k = _potential(x_k[:3], x_k[3:])
+            phi_k1 = _potential(x_k1[:3], x_k1[3:])
+            dphi = gamma * phi_k1 - phi_k
+            rE += dphi
+            rP -= dphi
+            info.update({
+                "phi_prev": phi_k,
+                "phi_next": phi_k1,
+            })
+        info["dPhi"] = dphi
+
+        info["evader_reward"] = rE
+        info["pursuer_reward"] = rP
+        info["rE_lq"] = rE
+        info["rP_lq"] = rP
+
+        return rE, rP, info
 
     def _update_nash_metric(self):
         """Nash Equilibrium 메트릭 업데이트"""

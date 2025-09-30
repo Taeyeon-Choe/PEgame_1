@@ -30,6 +30,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         
         self.use_gastm = use_gastm
         self.gastm_propagator = None
+        self._pending_pursuer_impulse = np.zeros(3, dtype=np.float32)
 
     def reset(
         self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
@@ -44,16 +45,44 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
                 initial_relative_state=self.state,
                 config=self.config
             )
+        self._pending_pursuer_impulse.fill(0.0)
         return obs, info
 
     def _simulate_relative_motion(self):
         """상대 운동 시뮬레이션 (모드에 따라 다른 방법 사용)"""
         if self.use_gastm and self.gastm_propagator:
-            # GASTMPropagator를 사용하여 상태 전파 (현재 시간 전달)
-            self.state = self.gastm_propagator.propagate(self.dt, self.t)
+            dv = np.asarray(self._pending_pursuer_impulse, dtype=np.float32)
+            try:
+                self.state = self.gastm_propagator.propagate_with_impulse(
+                    delta_v=dv,
+                    dt=self.dt,
+                    current_time=self.t,
+                    current_state=self.state,
+                )
+            except AttributeError:
+                # 구 버전 호환: impulse 기능이 없으면 기본 propagate 사용 + 속도 갱신
+                if np.any(dv != 0):
+                    self.state[3:] += dv
+                self.state = self.gastm_propagator.propagate(self.dt, self.t)
+            finally:
+                self._pending_pursuer_impulse.fill(0.0)
         else:
             # 기존의 비선형 동역학 수치 적분 사용
             super()._simulate_relative_motion()
+
+    def _apply_pursuer_delta_v(self, delta_v_p: np.ndarray):
+        """추격자 임펄스를 저장하여 GA-STM 전파에 반영"""
+        delta_v_p = np.asarray(delta_v_p, dtype=np.float32)
+        if not np.any(delta_v_p != 0):
+            self._pending_pursuer_impulse.fill(0.0)
+            if not (self.use_gastm and self.gastm_propagator):
+                super()._apply_pursuer_delta_v(delta_v_p)
+            return
+
+        if self.use_gastm and self.gastm_propagator:
+            self._pending_pursuer_impulse = delta_v_p.copy()
+        else:
+            super()._apply_pursuer_delta_v(delta_v_p)
 
     def compute_interception_strategy(self, state: np.ndarray) -> np.ndarray:
         policy = getattr(self.config, "pursuer_policy", "heuristic")
@@ -106,110 +135,6 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
             self.gastm_propagator.reinitialize_with_new_chief_orbit(
                 self.evader_orbit, self.state, self.t
             )
-
-    def step(
-        self, normalized_action_e: np.ndarray
-    ) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """환경 스텝 실행"""
-        # 1. 회피자(Evader) 액션 처리
-        action_e = self._denormalize_action(normalized_action_e)
-        delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax)
-        delta_v_e_mag = float(np.linalg.norm(delta_v_e))
-        self.total_delta_v_e += delta_v_e_mag
-    
-        # 회피자 기동 적용 (궤도 변경)
-        if np.any(delta_v_e):
-            self._apply_evader_delta_v(delta_v_e)
-    
-        # 2. 추격자(Pursuer) 액션 계산
-        if self.step_count % self.k == 0:
-            delta_v_p = self.compute_interception_strategy(self.state)
-            delta_v_p = np.asarray(delta_v_p, dtype=np.float32)
-            self.pursuer_last_action = delta_v_p
-        else:
-            delta_v_p = np.zeros(3, dtype=np.float32)
-    
-        # 3. 상태 전파 - 통합된 방식
-        if self.use_gastm and self.gastm_propagator:
-            # GA-STM 모드: 항상 propagate_with_control 사용
-            # GA-STM with impulse at the BEGINNING of the step
-            self.state = self.gastm_propagator.propagate_with_impulse(
-                delta_v=delta_v_p,
-                dt=self.dt,
-                current_time=self.t,
-                current_state=self.state
-            )
-        else:
-            # 비선형 모드: 기존 방식 유지
-            if np.any(delta_v_p):
-                self.state[3:] += delta_v_p  # 순간 임펄스
-            self._simulate_relative_motion()
-        self.state = np.asarray(self.state, dtype=np.float32)
-    
-        # 4. 시간 및 스텝 업데이트
-        self.t += self.dt
-        self.step_count += 1
-        
-        # 5. 종료 조건 및 보상 계산
-        terminated, truncated, termination_info = self.check_orbital_period_termination()
-        done = terminated or truncated
-        evader_reward, pursuer_reward, info = self._calculate_rewards(
-            done, termination_info, delta_v_e_mag
-        )
-
-        # [중요] 기본 환경과 동일하게 보상 히스토리 기록 (analyze_results 안전성 보장)
-        self.reward_history.append({"evader": evader_reward, "pursuer": pursuer_reward})
-
-        # 6. 관측값 생성 및 반환
-        observed_state = self.observe(self.state)
-        normalized_obs = self._normalize_obs(observed_state, self.pursuer_last_action)
-        
-        # 정보 딕셔너리 업데이트
-        info.update({
-            "relative_distance_m": float(np.linalg.norm(self.state[:3])),
-            "evader_dv_magnitude": delta_v_e_mag,
-            "pursuer_dv_magnitude": float(np.linalg.norm(delta_v_p)),
-            "total_evader_delta_v": self.total_delta_v_e,
-            "nash_metric": self.nash_metric,
-            "dynamics_mode": "GA_STM" if self.use_gastm else "Nonlinear",
-            "control_applied": np.any(delta_v_p)  # 디버깅용
-        })
-        
-        if "outcome" in termination_info:
-            info["outcome"] = termination_info["outcome"]
-
-        # 콜백 호환을 위한 거리 키 보강
-        if 'initial_relative_distance' not in info and self.initial_relative_distance is not None:
-            info['initial_relative_distance'] = float(self.initial_relative_distance)
-        final_dist = float(np.linalg.norm(self.state[:3]))
-        info.setdefault('final_relative_distance', final_dist)
-        info.setdefault('final_distance', final_dist)
-
-        # 에피소드 종료 시 추가 정보(초기 궤도 요소 등) 포함 - base env와 동일한 포맷
-        done = terminated or truncated
-        if done:
-            # 최종 상대거리 저장
-            self.final_relative_distance = final_dist
-
-            # 종료 정보 업데이트 (초기/최종 궤도 및 보상 요약 포함)
-            info.update({
-                "outcome": termination_info.get("outcome", "unknown"),
-                "termination_details": termination_info,
-                # 궤도 정보
-                "initial_evader_orbital_elements": self.initial_evader_orbital_elements,
-                "initial_pursuer_orbital_elements": self.initial_pursuer_orbital_elements,
-                "initial_relative_distance": self.initial_relative_distance,
-                "final_relative_distance": self.final_relative_distance,
-                # 보상 정보 (Stable-Baselines 호환 키 포함)
-                "evader_reward": evader_reward,
-                "pursuer_reward": pursuer_reward,
-                "episode": {
-                    "r": evader_reward,
-                    "l": self.step_count,
-                },
-            })
-
-        return normalized_obs.astype(np.float32, copy=False), evader_reward, terminated, truncated, info
 
     def compare_propagation_methods(self, test_duration: float = 300.0, 
                                   control_sequence: Optional[np.ndarray] = None) -> Dict:

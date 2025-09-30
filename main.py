@@ -710,6 +710,15 @@ def main():
     # 환경 변수 관련 인자 추가
     parser.add_argument('--use-gastm', action='store_true',
                        help='GA-STM 사용')
+    parser.add_argument('--reward-mode', type=str, default=None,
+                       choices=['original', 'lq_zero_sum', 'lq_zero_sum_shaped'],
+                       help='보상 모드 선택')
+    parser.add_argument('--lqr-re', type=float, nargs=3, default=None,
+                       help='Evader Δv 패널티 대각 (R_E): 3개 값')
+    parser.add_argument('--reward-gamma', type=float, default=None,
+                       help='잠재함수 shaping gamma (기본 1.0)')
+    parser.add_argument('--shape-alphas', type=float, nargs=2, default=None,
+                       help='[alpha_d, alpha_theta] for shaping')
     parser.add_argument('--c', type=float, default=None,
                        help='c 파라미터 (기본값: 0.001)')
     parser.add_argument('--max-steps', type=int, default=None,
@@ -791,6 +800,22 @@ def main():
         if args.delta_v_pmax is not None:
             custom_config['environment'] = custom_config.get('environment', {})
             custom_config['environment']['delta_v_pmax'] = args.delta_v_pmax
+
+        if args.reward_mode is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['reward_mode'] = args.reward_mode
+
+        if args.lqr_re is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['lqr_RE_diag'] = list(args.lqr_re)
+
+        if args.reward_gamma is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['reward_gamma'] = args.reward_gamma
+
+        if args.shape_alphas is not None:
+            custom_config['environment'] = custom_config.get('environment', {})
+            custom_config['environment']['shape_alphas'] = list(args.shape_alphas)
 
         if args.pursuer_policy is not None:
             custom_config['environment'] = custom_config.get('environment', {})

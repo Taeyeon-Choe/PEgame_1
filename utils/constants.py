@@ -46,6 +46,11 @@ ENV_PARAMS = {
     "max_initial_separation": 3e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
     "use_gastm": True,
+    # === Reward / LQ Zero-Sum options ===
+    "reward_mode": "original",  # "original" | "lq_zero_sum" | "lq_zero_sum_shaped"
+    "lqr_RE_diag": [1e-2, 1e-2, 1e-2],
+    "reward_gamma": 1.0,
+    "shape_alphas": [0.01, 0.005],
     "pursuer_policy": "heuristic",  # "heuristic" or "tvlqr"
     "lqr_horizon": 10,
     "lqr_Q_diag": [1.0, 1.0, 1.0, 0.05, 0.05, 0.05],

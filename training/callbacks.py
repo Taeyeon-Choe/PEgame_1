@@ -610,10 +610,10 @@ class PerformanceCallback(BaseCallback):
     def save_final_stats(self):
         """최종 통계 저장"""
         stats = {
-            "episodes_completed": self.episode_count,
-            "final_success_rate": self.success_rates[-1] if self.success_rates else 0,
-            "average_reward": np.mean(self.episode_rewards) if self.episode_rewards else 0,
-            "final_nash_metric": self.nash_metrics[-1] if self.nash_metrics else 0,
+            "episodes_completed": int(self.episode_count),
+            "final_success_rate": float(self.success_rates[-1]) if self.success_rates else 0.0,
+            "average_reward": float(np.mean(self.episode_rewards)) if self.episode_rewards else 0.0,
+            "final_nash_metric": float(self.nash_metrics[-1]) if self.nash_metrics else 0.0,
         }
         
         # JSON으로 저장

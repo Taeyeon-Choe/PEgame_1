@@ -47,6 +47,13 @@ class EnvironmentConfig:
     max_initial_separation: float = ENV_PARAMS["max_initial_separation"]
     use_rk4: bool = ENV_PARAMS["use_rk4"]
     use_gastm: bool = ENV_PARAMS["use_gastm"]
+    # === Reward / LQ Zero-Sum options ===
+    reward_mode: str = ENV_PARAMS["reward_mode"]
+    # 리스트 객체 공유 방지를 위해 얕은 복사본 사용
+    lqr_RE_diag: List[float] = field(default_factory=lambda: list(ENV_PARAMS["lqr_RE_diag"]))
+    reward_gamma: float = ENV_PARAMS["reward_gamma"]
+    # 리스트 객체 공유 방지를 위해 얕은 복사본 사용
+    shape_alphas: List[float] = field(default_factory=lambda: list(ENV_PARAMS["shape_alphas"]))
     pursuer_policy: str = ENV_PARAMS["pursuer_policy"]
     lqr_horizon: int = ENV_PARAMS["lqr_horizon"]
     lqr_Q_diag: List[float] = field(
