@@ -10,7 +10,7 @@ import copy
 import json
 from typing import Any, Dict, Optional
 from collections import deque, Counter
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 import torch
 from orbital_mechanics.coordinate_transforms import lvlh_to_eci
 from analysis.visualization import (
@@ -18,6 +18,7 @@ from analysis.visualization import (
     plot_training_progress,
     plot_delta_v_per_episode,
     aggregate_outcome_counts,
+    plot_sac_training_metrics,
 )
 from utils.constants import ANALYSIS_PARAMS
 
@@ -65,10 +66,8 @@ class EvasionTrackingCallback(BaseCallback):
         self.fuel_depleted = 0
         self.max_steps = 0
         
-        # 세분화된 회피 결과
+        # 회피 결과
         self.permanent_evasions = 0
-        self.conditional_evasions = 0
-        self.temporary_evasions = 0
         self.buffer_time_stats = []
         self.evader_delta_vs = []
         self.delta_v_window = deque(maxlen=window_size)
@@ -135,8 +134,12 @@ class EvasionTrackingCallback(BaseCallback):
         termination_details = info.get('termination_details', {})
         
         # 성공 여부 판단
-        success = outcome in ['permanent_evasion', 'conditional_evasion', 'temporary_evasion', 'max_steps_reached']
+        normalized_outcome = outcome.replace(' ', '_')
+        if 'conditional_evasion' in normalized_outcome or 'temporary_evasion' in normalized_outcome:
+            normalized_outcome = 'permanent_evasion'
+        success = normalized_outcome in ['permanent_evasion', 'max_steps_reached']
         self.success_window.append(1 if success else 0)
+        outcome = normalized_outcome
 
         total_evader_dv = self._extract_total_delta_v(info, termination_details)
         if total_evader_dv is None:
@@ -208,14 +211,13 @@ class EvasionTrackingCallback(BaseCallback):
         outcome = outcome.lower()
         if 'captured' in outcome:
             self.captures += 1
-        elif 'permanent_evasion' in outcome:
+        elif any(keyword in outcome for keyword in (
+            'permanent_evasion',
+            'conditional_evasion',
+            'temporary_evasion',
+            'evaded',
+        )):
             self.permanent_evasions += 1
-            self.evasions += 1
-        elif 'conditional_evasion' in outcome:
-            self.conditional_evasions += 1
-            self.evasions += 1
-        elif 'temporary_evasion' in outcome:
-            self.temporary_evasions += 1
             self.evasions += 1
         elif 'fuel_depleted' in outcome:
             self.fuel_depleted += 1
@@ -248,15 +250,14 @@ class EvasionTrackingCallback(BaseCallback):
         print(f"\n{'='*70}")
         print(f"에피소드 {self.episode_count} - 성공률(최근 {len(self.success_window)}): {success_rate:.2%}")
         print(f"{'='*70}")
-        print(f"  - 결과 분포: 포획={self.captures}, 영구회피={self.permanent_evasions}, "
-              f"조건부회피={self.conditional_evasions}, 임시회피={self.temporary_evasions}, "
-              f"연료소진={self.fuel_depleted}, 최대스텝={self.max_steps}")
+        print(
+            f"  - 결과 분포: 포획={self.captures}, 회피={self.permanent_evasions}, "
+            f"연료소진={self.fuel_depleted}, 최대스텝={self.max_steps}"
+        )
 
         macro_counts = aggregate_outcome_counts({
             'captured': self.captures,
             'permanent_evasion': self.permanent_evasions,
-            'conditional_evasion': self.conditional_evasions,
-            'temporary_evasion': self.temporary_evasions,
             'fuel_depleted': self.fuel_depleted,
             'max_steps_reached': self.max_steps,
         })
@@ -321,12 +322,10 @@ class EvasionTrackingCallback(BaseCallback):
             self.logger.record("evasion/success_rate", success_rate)
             self.logger.record("evasion/capture_rate", self.captures / max(1, self.episode_count))
             self.logger.record("evasion/evade_rate", self.evasions / max(1, self.episode_count))
-            self.logger.record("evasion/permanent_evasion_rate", 
-                             self.permanent_evasions / max(1, self.episode_count))
-            self.logger.record("evasion/conditional_evasion_rate", 
-                             self.conditional_evasions / max(1, self.episode_count))
-            self.logger.record("evasion/temporary_evasion_rate", 
-                             self.temporary_evasions / max(1, self.episode_count))
+            self.logger.record(
+                "evasion/permanent_evasion_rate",
+                self.permanent_evasions / max(1, self.episode_count),
+            )
             
             # Zero-Sum 메트릭
             if self.evader_rewards:
@@ -340,21 +339,13 @@ class EvasionTrackingCallback(BaseCallback):
             return
         
         # 플롯 데이터 준비
-        outcome_counts = [
-            self.captures,
-            self.permanent_evasions,
-            self.conditional_evasions,
-            self.fuel_depleted,
-            self.max_steps
-        ]
-        macro_counts = aggregate_outcome_counts({
+        outcome_counts = {
             'captured': self.captures,
             'permanent_evasion': self.permanent_evasions,
-            'conditional_evasion': self.conditional_evasions,
-            'temporary_evasion': self.temporary_evasions,
             'fuel_depleted': self.fuel_depleted,
             'max_steps_reached': self.max_steps,
-        })
+        }
+        macro_counts = aggregate_outcome_counts(outcome_counts)
 
         try:
             plot_training_progress(
@@ -367,6 +358,13 @@ class EvasionTrackingCallback(BaseCallback):
                 episode_count=self.episode_count,
                 save_dir=self.log_dir,
                 macro_counts=macro_counts,
+                episode_rewards=self.episode_rewards,
+            )
+
+            progress_csv = os.path.join(self.log_dir, 'progress.csv')
+            plot_sac_training_metrics(
+                progress_path=progress_csv,
+                save_dir=self.log_dir,
             )
         except Exception as e:
             if self.verbose > 0:
@@ -388,7 +386,7 @@ class EvasionTrackingCallback(BaseCallback):
             print(f"총 에피소드: {self.episode_count}")
             print(f"최종 성공률: {self.success_rates[-1]:.2%}" if self.success_rates else "N/A")
             print(f"포획: {self.captures}, 회피: {self.evasions}")
-            print(f"영구회피: {self.permanent_evasions}, 조건부회피: {self.conditional_evasions}")
+            print(f"영구 회피 판정: {self.permanent_evasions}")
         
         # 최종 플롯 생성
         self.plot_interim_results()
@@ -400,8 +398,6 @@ class EvasionTrackingCallback(BaseCallback):
             "captures": self.captures,
             "evasions": self.evasions,
             "permanent_evasions": self.permanent_evasions,
-            "conditional_evasions": self.conditional_evasions,
-            "temporary_evasions": self.temporary_evasions,
             "fuel_depleted": self.fuel_depleted,
             "max_steps": self.max_steps,
             "episodes_info": self.episodes_info[-100:],  # 마지막 100개만 저장
@@ -437,20 +433,30 @@ class EvasionTrackingCallback(BaseCallback):
 
         self.captures = int(data.get("captures", self.captures) or self.captures)
         self.evasions = int(data.get("evasions", self.evasions) or self.evasions)
-        self.permanent_evasions = int(data.get("permanent_evasions", self.permanent_evasions) or self.permanent_evasions)
-        self.conditional_evasions = int(data.get("conditional_evasions", self.conditional_evasions) or self.conditional_evasions)
-        self.temporary_evasions = int(data.get("temporary_evasions", self.temporary_evasions) or self.temporary_evasions)
+
+        base_permanent = int(
+            data.get("permanent_evasions", self.permanent_evasions) or self.permanent_evasions
+        )
+        legacy_conditional = int(data.get("conditional_evasions", 0) or 0)
+        legacy_temporary = int(data.get("temporary_evasions", 0) or 0)
+        self.permanent_evasions = base_permanent + legacy_conditional + legacy_temporary
+
         self.fuel_depleted = int(data.get("fuel_depleted", self.fuel_depleted) or self.fuel_depleted)
         self.max_steps = int(data.get("max_steps", self.max_steps) or self.max_steps)
 
         outcome_counts = data.get("outcome_counts")
         if isinstance(outcome_counts, dict):
             self.captures = int(outcome_counts.get("captured", self.captures))
-            self.permanent_evasions = int(outcome_counts.get("permanent_evasion", self.permanent_evasions))
-            self.conditional_evasions = int(outcome_counts.get("conditional_evasion", self.conditional_evasions))
+            permanent_from_counts = int(
+                outcome_counts.get("permanent_evasion", self.permanent_evasions)
+            )
+            legacy_conditional = int(outcome_counts.get("conditional_evasion", 0) or 0)
+            legacy_temporary = int(outcome_counts.get("temporary_evasion", 0) or 0)
+            self.permanent_evasions = permanent_from_counts + legacy_conditional + legacy_temporary
             self.fuel_depleted = int(outcome_counts.get("fuel_depleted", self.fuel_depleted))
             self.max_steps = int(outcome_counts.get("max_steps", self.max_steps))
-            self.evasions = int(data.get("evasions", self.permanent_evasions + self.conditional_evasions))
+
+        self.evasions = max(self.evasions, self.permanent_evasions)
 
         # 최근 성공/ΔV 기록 복원
         recent_successes = data.get("recent_successes")
@@ -489,8 +495,6 @@ class EvasionTrackingCallback(BaseCallback):
             "captures": self.captures,
             "evasions": self.evasions,
             "permanent_evasions": self.permanent_evasions,
-            "conditional_evasions": self.conditional_evasions,
-            "temporary_evasions": self.temporary_evasions,
             "fuel_depleted": self.fuel_depleted,
             "max_steps": self.max_steps,
             "evader_rewards": self.evader_rewards,
@@ -503,7 +507,6 @@ class EvasionTrackingCallback(BaseCallback):
             "outcome_counts": {
                 "captured": self.captures,
                 "permanent_evasion": self.permanent_evasions,
-                "conditional_evasion": self.conditional_evasions,
                 "fuel_depleted": self.fuel_depleted,
                 "max_steps": self.max_steps,
             },
@@ -584,30 +587,48 @@ class PerformanceCallback(BaseCallback):
             self.episode_count += 1
 
             episode_data = final_info.get("episode", {})
-            episode_reward = episode_data.get("r", final_info.get("evader_reward", 0.0))
-            episode_length = episode_data.get("l", final_info.get("episode_length", 0))
+            episode_reward = episode_data.get(
+                "r",
+                final_info.get(
+                    "evader_total_reward",
+                    final_info.get("evader_reward", 0.0),
+                ),
+            )
+            episode_reward = float(episode_reward)
+            episode_length = int(episode_data.get("l", final_info.get("episode_length", 0)))
             self.episode_rewards.append(episode_reward)
             self.episode_lengths.append(episode_length)
 
-            evader_reward = final_info.get("evader_reward", episode_reward)
-            pursuer_reward = final_info.get("pursuer_reward", -evader_reward)
+            evader_reward = float(final_info.get("evader_total_reward", final_info.get("evader_reward", episode_reward)))
+            pursuer_reward = float(final_info.get("pursuer_total_reward", final_info.get("pursuer_reward", -evader_reward)))
             self.evader_rewards.append(evader_reward)
             self.pursuer_rewards.append(pursuer_reward)
             self.nash_metrics.append(final_info.get("nash_metric", 0.0))
             self.buffer_times.append(final_info.get("buffer_time", 0.0))
 
             outcome = str(final_info.get("outcome", "unknown")).lower()
+            if outcome in ("conditional_evasion", "temporary_evasion"):
+                outcome = "permanent_evasion"
             self.outcome_counter[outcome] += 1
 
             success = outcome in [
                 'permanent_evasion',
-                'conditional_evasion',
-                'temporary_evasion',
                 'max_steps_reached',
             ]
             self.success_window.append(1 if success else 0)
             success_rate = float(np.mean(self.success_window)) if self.success_window else 0.0
             self.success_rates.append(success_rate)
+
+            if self.logger is not None:
+                recent_window = min(len(self.episode_rewards), self.window_size)
+                reward_ma = float(np.mean(self.episode_rewards[-recent_window:])) if recent_window else float(episode_reward)
+                self.logger.record("performance/episode_reward", float(episode_reward))
+                self.logger.record("performance/episode_reward_ma", reward_ma)
+                self.logger.record("performance/episode_length", float(episode_length))
+                self.logger.record("performance/success_rate_ma", success_rate)
+                self.logger.record("performance/evader_total_reward", float(evader_reward))
+                self.logger.record("performance/pursuer_total_reward", float(pursuer_reward))
+                self.logger.record("performance/nash_metric", float(self.nash_metrics[-1]))
 
             if self.verbose > 0 and self.episode_count % 10 == 0:
                 print(f"\n에피소드 {self.episode_count}:")
@@ -638,15 +659,24 @@ class PerformanceCallback(BaseCallback):
         """플롯 저장"""
         try:
             macro_counts = self._macro_outcome_counts()
+            permanent_total = sum(
+                self.outcome_counter.get(key, 0)
+                for key in (
+                    'permanent_evasion',
+                    'conditional_evasion',
+                    'temporary_evasion',
+                    'evaded',
+                )
+            )
+
             plot_training_progress(
                 success_rates=self.success_rates,
-                outcome_counts=[
-                    self.outcome_counter.get('captured', 0),
-                    self.outcome_counter.get('permanent_evasion', 0),
-                    self.outcome_counter.get('conditional_evasion', 0),
-                    self.outcome_counter.get('fuel_depleted', 0),
-                    self.outcome_counter.get('max_steps_reached', 0),
-                ],
+                outcome_counts={
+                    'captured': self.outcome_counter.get('captured', 0),
+                    'permanent_evasion': permanent_total,
+                    'fuel_depleted': self.outcome_counter.get('fuel_depleted', 0),
+                    'max_steps_reached': self.outcome_counter.get('max_steps_reached', 0),
+                },
                 evader_rewards=self.evader_rewards,
                 pursuer_rewards=self.pursuer_rewards,
                 nash_metrics=self.nash_metrics,
@@ -654,6 +684,13 @@ class PerformanceCallback(BaseCallback):
                 episode_count=self.episode_count,
                 save_dir=self.plot_dir,
                 macro_counts=macro_counts,
+                episode_rewards=self.episode_rewards,
+            )
+
+            progress_csv = os.path.join(self.log_dir, 'progress.csv')
+            plot_sac_training_metrics(
+                progress_path=progress_csv,
+                save_dir=self.plot_dir,
             )
             
             if self.verbose > 0:
@@ -733,23 +770,80 @@ class PerformanceCallback(BaseCallback):
 class ModelSaveCallback(BaseCallback):
     """모델 저장 콜백 - 벡터 환경 지원"""
     
-    def __init__(self, save_freq=10000, save_path="./models/", name_prefix="model", verbose=0):
+    def __init__(
+        self,
+        save_freq: int = 10000,
+        save_path: str = "./models/",
+        name_prefix: str = "model",
+        verbose: int = 0,
+        save_replay_buffer: bool = True,
+        overwrite_latest: bool = False,
+    ):
         super().__init__(verbose)
         self.save_freq = save_freq
         self.save_path = save_path
         self.name_prefix = name_prefix
+        self.save_replay_buffer = save_replay_buffer
+        self.overwrite_latest = overwrite_latest
         
         # 디렉토리 생성
         os.makedirs(save_path, exist_ok=True)
     
     def _on_step(self):
         if self.n_calls % self.save_freq == 0:
-            save_file = f"{self.save_path}/{self.name_prefix}_step_{self.n_calls}.zip"
+            if self.overwrite_latest:
+                save_file = os.path.join(self.save_path, f"{self.name_prefix}.zip")
+            else:
+                save_file = os.path.join(
+                    self.save_path,
+                    f"{self.name_prefix}_step_{self.n_calls}.zip",
+                )
+
             self.model.save(save_file)
+
+            if self.save_replay_buffer and hasattr(self.model, "save_replay_buffer"):
+                buffer_path = save_file.replace(".zip", "_replay_buffer.pkl")
+                self.model.save_replay_buffer(buffer_path)
+
             if self.verbose > 0:
-                print(f"모델 저장됨: {save_file}")
+                print(f"모델 체크포인트 저장됨: {save_file}")
         
         return True
+
+
+class EvalCallbackWithReplayBuffer(EvalCallback):
+    """평가 시 최적 모델과 리플레이 버퍼를 함께 저장."""
+
+    def __init__(self, *args, save_replay_buffer: bool = True, replay_buffer_suffix: str = "_replay_buffer.pkl", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.save_replay_buffer = save_replay_buffer
+        self.replay_buffer_suffix = replay_buffer_suffix
+
+    def _save_model(self) -> None:
+        super()._save_model()
+
+        if not self.save_replay_buffer:
+            return
+
+        if self.best_model_save_path is None:
+            return
+
+        if not hasattr(self.model, "save_replay_buffer"):
+            return
+
+        buffer_path = os.path.join(
+            self.best_model_save_path,
+            f"{self.name_prefix}{self.replay_buffer_suffix}",
+        )
+
+        try:
+            self.model.save_replay_buffer(buffer_path)
+        except Exception as exc:
+            if self.verbose > 0:
+                print(f"리플레이 버퍼 저장 실패: {buffer_path} ({exc})")
+        else:
+            if self.verbose > 0:
+                print(f"리플레이 버퍼 저장됨: {buffer_path}")
 
 
 class EarlyStoppingCallback(BaseCallback):

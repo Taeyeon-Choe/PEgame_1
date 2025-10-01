@@ -74,6 +74,101 @@ def save_data_to_csv(data: Dict[str, List], filepath: str):
             writer.writerow(row)
 
 
+def moving_average(values: List[float], window: int) -> List[float]:
+    """단순 이동 평균 시퀀스를 계산한다."""
+    if not values:
+        return []
+
+    window = max(1, window)
+    averaged: List[float] = []
+    for idx in range(len(values)):
+        start = max(0, idx + 1 - window)
+        segment = values[start: idx + 1]
+        averaged.append(float(np.mean(segment)))
+    return averaged
+
+
+def _load_metric_series(progress_path: str, metric: str, step_key: str) -> Tuple[List[float], List[float]]:
+    """progress.csv에서 지정된 메트릭의 (step, value) 시퀀스를 추출한다."""
+    if not os.path.exists(progress_path):
+        return [], []
+
+    steps: List[float] = []
+    values: List[float] = []
+
+    with open(progress_path, newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for idx, row in enumerate(reader):
+            raw_val = row.get(metric)
+            if raw_val in (None, ''):
+                continue
+            try:
+                value = float(raw_val)
+            except (TypeError, ValueError):
+                continue
+
+            raw_step = row.get(step_key) or row.get('total_timesteps') or row.get('timesteps')
+            if raw_step in (None, ''):
+                step = float(idx + 1)
+            else:
+                try:
+                    step = float(raw_step)
+                except (TypeError, ValueError):
+                    step = float(idx + 1)
+
+            steps.append(step)
+            values.append(value)
+
+    return steps, values
+
+
+def plot_sac_training_metrics(progress_path: str,
+                              save_dir: str,
+                              metrics: Optional[List[str]] = None,
+                              window: int = 100) -> None:
+    """progress.csv 기반으로 SAC 학습 지표를 플롯하고 CSV로 저장한다."""
+    if not os.path.exists(progress_path):
+        return
+
+    metrics = metrics or [
+        'train/actor_loss',
+        'train/critic_loss',
+        'train/entropy_loss',
+        'train/ent_coef',
+        'train/log_std',
+    ]
+
+    step_key = 'time/total_timesteps'
+    os.makedirs(save_dir, exist_ok=True)
+
+    for metric in metrics:
+        steps, values = _load_metric_series(progress_path, metric, step_key)
+        if len(steps) < 2 or len(values) < 2:
+            continue
+
+        avg_values = moving_average(values, min(window, len(values)))
+
+        plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+        plt.plot(steps, values, label=metric, color='tab:blue', alpha=0.4, linewidth=0.9)
+        plt.plot(steps, avg_values, label=f'Moving Average ({window})', color='tab:blue', linewidth=2)
+        plt.xlabel('Total Timesteps')
+        plt.ylabel(metric)
+        plt.title(metric)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        metric_safe = metric.replace('/', '_')
+        plt.savefig(f'{save_dir}/{metric_safe}.png', dpi=PLOT_PARAMS['dpi'])
+        plt.close()
+
+        metric_data = {
+            'total_timesteps': steps,
+            metric_safe: values,
+            f'{metric_safe}_ma': avg_values,
+        }
+        save_data_to_csv(metric_data, f'{save_dir}/{metric_safe}.csv')
+
+
 def aggregate_outcome_counts(outcome_counts: Dict[str, Any]) -> Dict[str, int]:
     """세부 결과 카운트를 대분류 지표로 집계한다."""
     if not outcome_counts:
@@ -129,14 +224,16 @@ def aggregate_outcome_counts(outcome_counts: Dict[str, Any]) -> Dict[str, int]:
 
 
 def plot_training_progress(success_rates: List[float],
-                          outcome_counts: List[int],
+                          outcome_counts,
                           evader_rewards: List[float],
                           pursuer_rewards: List[float],
                           nash_metrics: List[float],
                           buffer_times: List[float],
                           episode_count: int,
                           save_dir: str,
-                          macro_counts: Optional[Dict[str, int]] = None):
+                          macro_counts: Optional[Dict[str, int]] = None,
+                          episode_rewards: Optional[List[float]] = None,
+                          reward_window: int = 100):
     """학습 진행 상황 시각화"""
     setup_matplotlib()
     
@@ -169,33 +266,78 @@ def plot_training_progress(success_rates: List[float],
         # 성공률 데이터 저장
         save_data_to_csv({'episode': list(range(len(success_rates))), 'success_rate': success_rates}, 
                         f'{save_dir}/success_rate_data.csv')
-    
+
+    # 1-b. 에피소드 보상 추세
+    if episode_rewards:
+        episodes_axis = list(range(1, len(episode_rewards) + 1))
+        reward_ma = moving_average(episode_rewards, reward_window)
+
+        plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+        plt.plot(episodes_axis, episode_rewards, label='Episode Reward',
+                 color=PLOT_PARAMS['colors']['evader'], alpha=0.35, linewidth=0.8)
+        plt.plot(episodes_axis, reward_ma, label=f'Moving Average ({reward_window})',
+                 color='darkgreen', linewidth=2)
+        plt.xlabel('Episode')
+        plt.ylabel('Total Reward')
+        plt.title('Episode Reward Trend')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        plt.savefig(f'{save_dir}/episode_reward_trend.png', dpi=PLOT_PARAMS['dpi'])
+        plt.close()
+
+        reward_data = {
+            'episode': episodes_axis,
+            'episode_reward': episode_rewards,
+            'episode_reward_ma': reward_ma,
+        }
+        save_data_to_csv(reward_data, f'{save_dir}/episode_rewards.csv')
+
     # 2. 결과 분포 파이 차트
-    if outcome_counts and sum(outcome_counts) > 0:
-        labels = ['Captured', 'Permanent Evasion', 'Conditional Evasion', 'Fuel Depleted', 'Max Steps']
-        # 0이 아닌 값들만 필터링
-        filtered_counts = []
-        filtered_labels = []
-        for i, count in enumerate(outcome_counts):
-            if count > 0:
-                filtered_counts.append(count)
-                filtered_labels.append(labels[i])
-        
-        if filtered_counts:
-            plt.figure(figsize=(10, 10))
-            colors = plt.cm.Set3(np.linspace(0, 1, len(filtered_counts)))
-            wedges, texts, autotexts = plt.pie(filtered_counts, labels=filtered_labels, 
-                                               autopct='%1.1f%%', colors=colors,
-                                               startangle=90)
-            plt.title(f'Outcome Distribution (Episode {episode_count})')
-            plt.tight_layout()
-            plt.savefig(f'{save_dir}/outcome_distribution.png', dpi=PLOT_PARAMS['dpi'])
-            plt.close()
-            
-            # 결과 분포 데이터 저장
-            outcome_data = {label: count for label, count in zip(filtered_labels, filtered_counts)}
-            with open(f'{save_dir}/outcome_distribution.json', 'w') as f:
-                json.dump(_json_ready(outcome_data), f, indent=2)
+    if outcome_counts:
+        if isinstance(outcome_counts, dict):
+            raw_items = [
+                (str(label), int(value))
+                for label, value in outcome_counts.items()
+            ]
+        else:
+            legacy_labels = [
+                'Captured',
+                'Permanent Evasion',
+                'Evaded (legacy)',
+                'Fuel Depleted',
+                'Max Steps',
+            ]
+            default_labels = [
+                'Captured',
+                'Evaded',
+                'Fuel Depleted',
+                'Max Steps',
+            ]
+            labels_source = legacy_labels if len(outcome_counts) >= 5 else default_labels
+            raw_items = list(zip(labels_source[:len(outcome_counts)], outcome_counts))
+
+        total_outcomes = sum(count for _, count in raw_items)
+        if total_outcomes > 0:
+            filtered = [(label, count) for label, count in raw_items if count > 0]
+            if filtered:
+                plt.figure(figsize=(10, 10))
+                colors = plt.cm.Set3(np.linspace(0, 1, len(filtered)))
+                wedges, texts, autotexts = plt.pie(
+                    [count for _, count in filtered],
+                    labels=[label for label, _ in filtered],
+                    autopct='%1.1f%%',
+                    colors=colors,
+                    startangle=90,
+                )
+                plt.title(f'Outcome Distribution (Episode {episode_count})')
+                plt.tight_layout()
+                plt.savefig(f'{save_dir}/outcome_distribution.png', dpi=PLOT_PARAMS['dpi'])
+                plt.close()
+
+                outcome_data = {label: count for label, count in filtered}
+                with open(f'{save_dir}/outcome_distribution.json', 'w') as f:
+                    json.dump(_json_ready(outcome_data), f, indent=2)
 
     # 2-b. 대분류 결과 바 차트 (max_steps 회피 포함)
     if macro_counts:
@@ -321,6 +463,15 @@ def plot_training_progress(success_rates: List[float],
         plt.close()
     
     # 모든 학습 데이터를 하나의 JSON 파일로 저장
+    episode_rewards_limited = None
+    reward_ma_limited = []
+    if episode_rewards:
+        if len(episode_rewards) > 1000:
+            episode_rewards_limited = episode_rewards[-1000:]
+        else:
+            episode_rewards_limited = episode_rewards
+        reward_ma_limited = moving_average(episode_rewards_limited, reward_window)
+
     all_training_data = {
         'episode_count': episode_count,
         'success_rates': success_rates,
@@ -329,7 +480,9 @@ def plot_training_progress(success_rates: List[float],
         'pursuer_rewards': pursuer_rewards[-1000:] if len(pursuer_rewards) > 1000 else pursuer_rewards,
         'nash_metrics': nash_metrics,
         'buffer_times': buffer_times,
-        'macro_counts': macro_counts
+        'macro_counts': macro_counts,
+        'episode_rewards': episode_rewards_limited,
+        'episode_reward_ma': reward_ma_limited,
     }
 
     with open(f'{save_dir}/training_progress.json', 'w') as f:
@@ -805,15 +958,25 @@ def plot_zero_sum_analysis(zero_sum_metrics: Dict, success: List[bool],
     if 'safety_scores' in zero_sum_metrics and zero_sum_metrics['safety_scores']:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
         safety_scores = zero_sum_metrics['safety_scores']
-        colors = ['g' if s > SAFETY_THRESHOLDS['permanent_evasion'] 
-                 else ('b' if s > SAFETY_THRESHOLDS['conditional_evasion'] else 'r') 
-                 for s in safety_scores]
-        
+        colors = [
+            'g' if s >= SAFETY_THRESHOLDS['permanent_evasion']
+            else ('y' if s >= SAFETY_THRESHOLDS['evaded'] else 'r')
+            for s in safety_scores
+        ]
+
         plt.bar(range(1, len(safety_scores) + 1), safety_scores, color=colors, alpha=0.7)
-        plt.axhline(y=SAFETY_THRESHOLDS['permanent_evasion'], color='g', 
-                   linestyle='--', label='Permanent Evasion Threshold')
-        plt.axhline(y=SAFETY_THRESHOLDS['conditional_evasion'], color='b', 
-                   linestyle='--', label='Conditional Evasion Threshold')
+        plt.axhline(
+            y=SAFETY_THRESHOLDS['permanent_evasion'],
+            color='g',
+            linestyle='--',
+            label='Secure Evade Threshold',
+        )
+        plt.axhline(
+            y=SAFETY_THRESHOLDS['evaded'],
+            color='y',
+            linestyle='--',
+            label='Evade Threshold',
+        )
         plt.xlabel('Test Run')
         plt.ylabel('Safety Score')
         plt.title('Safety Score by Test Run')

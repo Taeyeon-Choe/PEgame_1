@@ -614,6 +614,11 @@ class PursuitEvasionEnv(gym.Env):
 
         if done:
             self.final_relative_distance = current_relative_distance
+            total_evader_reward, total_pursuer_reward = self._compute_episode_total_rewards()
+            episode_summary = {
+                "r": total_evader_reward,
+                "l": self.step_count,
+            }
             info.update({
                 "outcome": termination_info.get("outcome", "unknown"),
                 "termination_details": termination_info,
@@ -621,15 +626,30 @@ class PursuitEvasionEnv(gym.Env):
                 "initial_pursuer_orbital_elements": self.initial_pursuer_orbital_elements,
                 "initial_relative_distance": self.initial_relative_distance,
                 "final_relative_distance": self.final_relative_distance,
-                "evader_reward": evader_reward,
-                "pursuer_reward": pursuer_reward,
-                "episode": {
-                    "r": evader_reward,
-                    "l": self.step_count,
-                },
+                "evader_final_step_reward": evader_reward,
+                "pursuer_final_step_reward": pursuer_reward,
+                "evader_total_reward": total_evader_reward,
+                "pursuer_total_reward": total_pursuer_reward,
+                "evader_reward": total_evader_reward,
+                "pursuer_reward": total_pursuer_reward,
+                "episode": episode_summary,
             })
 
         return normalized_obs.astype(np.float32, copy=False), evader_reward, terminated, truncated, info
+
+    def _compute_episode_total_rewards(self) -> Tuple[float, float]:
+        """현재 에피소드의 회피자/추격자 보상 총합 계산"""
+        if not self.reward_history:
+            return 0.0, 0.0
+
+        if isinstance(self.reward_history[0], dict):
+            total_evader = float(sum(r.get("evader", 0.0) for r in self.reward_history))
+            total_pursuer = float(sum(r.get("pursuer", 0.0) for r in self.reward_history))
+        else:
+            total_evader = float(sum(self.reward_history))
+            total_pursuer = -total_evader
+
+        return total_evader, total_pursuer
 
     def _apply_evader_delta_v(self, delta_v_e: np.ndarray):
         """회피자 델타-V 적용 및 궤도 업데이트"""
@@ -932,38 +952,27 @@ class PursuitEvasionEnv(gym.Env):
 
                     self.safety_score_history.append(safety_score)
 
-                    if len(self.safety_score_history) >= self.orbital_buffer_safety:
+                    if len(self.safety_score_history) >= self.orbital_buffer_safety and self.complete_orbits >= 1:
                         min_safety_score = min(self.safety_score_history)
                         avg_safety_score = sum(self.safety_score_history) / len(self.safety_score_history)
 
-                        # 1.5궤도 이상 안전도 점수 유지 시
-                        if min_safety_score > SAFETY_THRESHOLDS["permanent_evasion"] and self.complete_orbits >= 2:
-                            self.termination_details = {
-                                "outcome": "permanent_evasion",
-                                "evader_reward": 10,
-                                "pursuer_reward": -10,
-                                "safety_score": min_safety_score,
-                                "avg_safety_score": avg_safety_score,
-                                "buffer_time": self.orbital_buffer_safety * self.dt,
-                                "safety_analysis": safety_analysis,
-                                "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
-                                "game_orbits": self.complete_orbits,
-                            }
-                            return True, False, self.termination_details
+                        reward = 10 if (
+                            min_safety_score > SAFETY_THRESHOLDS["permanent_evasion"]
+                            and self.complete_orbits >= 2
+                        ) else 7
 
-                        elif min_safety_score > SAFETY_THRESHOLDS["conditional_evasion"] and self.complete_orbits >= 1:
-                            self.termination_details = {
-                                "outcome": "conditional_evasion",
-                                "evader_reward": 7,
-                                "pursuer_reward": -7,
-                                "safety_score": min_safety_score,
-                                "avg_safety_score": avg_safety_score,
-                                "buffer_time": self.orbital_buffer_safety * self.dt,
-                                "safety_analysis": safety_analysis,
-                                "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
-                                "game_orbits": self.complete_orbits,
-                            }
-                            return True, False, self.termination_details
+                        self.termination_details = {
+                            "outcome": "permanent_evasion",
+                            "evader_reward": reward,
+                            "pursuer_reward": -reward,
+                            "safety_score": min_safety_score,
+                            "avg_safety_score": avg_safety_score,
+                            "buffer_time": self.orbital_buffer_safety * self.dt,
+                            "safety_analysis": safety_analysis,
+                            "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
+                            "game_orbits": self.complete_orbits,
+                        }
+                        return True, False, self.termination_details
         else:
             # 회피 거리 미달 시 히스토리 일부만 제거 (부드러운 전환)
             if len(self.evasion_status_history) > 0:

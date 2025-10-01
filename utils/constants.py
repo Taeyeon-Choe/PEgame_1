@@ -53,8 +53,8 @@ ENV_PARAMS = {
     "shape_alphas": [0.01, 0.005],
     "pursuer_policy": "tvlqr",  # "heuristic" or "tvlqr"
     "lqr_horizon": 10,
-    "lqr_Q_diag": [1.0, 1.0, 1.0, 0.05, 0.05, 0.05],
-    "lqr_QN_diag": [5.0, 5.0, 5.0, 0.1, 0.1, 0.1],
+    "lqr_Q_diag": [0.001, 0.001, 0.001, 0.05, 0.05, 0.05],
+    "lqr_QN_diag": [0.005, 0.005, 0.005, 0.1, 0.1, 0.1],
     "lqr_R_diag": [1e-2, 1e-2, 1e-2],
 }
 
@@ -69,14 +69,14 @@ BUFFER_PARAMS = {
 TRAINING_PARAMS = {
     "total_timesteps": 100000,
     "nash_total_timesteps": 50000,
-    "learning_rate": 0.0001,
-    "buffer_size": 100000,
+    "learning_rate": 0.0003,
+    "buffer_size": 1000000,
     "batch_size": 512,
-    "tau": 0.005,
+    "tau": 0.003,
     "gamma": 0.98,
-    "net_arch": [512, 512, 512],
+    "net_arch": [256, 256, 256],
     "save_freq": 10000,
-    "n_envs": min(multiprocessing.cpu_count(), 14),
+    "n_envs": min(multiprocessing.cpu_count(), 16),
 }
 
 # 시각화 설정
@@ -96,8 +96,7 @@ PLOT_PARAMS = {
 # 안전도 평가 임계값
 SAFETY_THRESHOLDS = {
     "permanent_evasion": 0.7,  # 영구 회피 임계값
-    "conditional_evasion": 0.4,  # 조건부 회피 임계값
-    "temporary_evasion": 0.0,  # 임시 회피 임계값
+    "evaded": 0.4,  # 일반 회피 인정 임계값
 }
 
 # 결과 분석 설정

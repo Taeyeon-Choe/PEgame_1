@@ -73,8 +73,6 @@ class ModelEvaluator:
         outcome_types = {
             'captured': 0,
             'permanent_evasion': 0,
-            'conditional_evasion': 0,
-            'temporary_evasion': 0,
             'fuel_depleted': 0,
             'max_steps_reached': 0
         }
@@ -109,8 +107,11 @@ class ModelEvaluator:
             
             # 결과별 카운트
             outcome = scenario_result['info'].get('termination_type', 'unknown')
-            if outcome in outcome_types:
-                outcome_types[outcome] += 1
+            normalized_outcome = str(outcome).lower()
+            if normalized_outcome in ('conditional_evasion', 'temporary_evasion'):
+                normalized_outcome = 'permanent_evasion'
+            if normalized_outcome in outcome_types:
+                outcome_types[normalized_outcome] += 1
             
             # Zero-Sum 메트릭 수집
             self._collect_zero_sum_metrics(scenario_result, zero_sum_metrics)
@@ -213,16 +214,20 @@ class ModelEvaluator:
         termination_type = info.get('termination_type') or info.get('outcome')
         if termination_type:
             termination_str = str(termination_type)
-            metrics['outcome'] = termination_str
-            metrics['termination_type'] = termination_str
-
             outcome_lower = termination_str.lower()
+            normalized_outcome = outcome_lower
+            if normalized_outcome in ('conditional_evasion', 'temporary_evasion'):
+                normalized_outcome = 'permanent_evasion'
+
+            metrics['outcome'] = normalized_outcome
+            metrics['termination_type'] = normalized_outcome
+
             reached_max_steps = 'max_step' in outcome_lower
             if reached_max_steps:
                 metrics['max_steps_reached'] = True
 
             evaded_keywords = ('evasion', 'evaded')
-            is_evaded = any(keyword in outcome_lower for keyword in evaded_keywords)
+            is_evaded = any(keyword in normalized_outcome for keyword in evaded_keywords)
             if reached_max_steps or is_evaded:
                 metrics['success'] = True
 

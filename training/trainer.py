@@ -12,7 +12,7 @@ from pathlib import Path
 import torch
 import numpy as np
 from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import CallbackList, EvalCallback
+from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.vec_env import DummyVecEnv
 from environment.pursuit_evasion_env import PursuitEvasionEnv
 from environment.pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
@@ -26,6 +26,8 @@ from training.callbacks import (
     EarlyStoppingCallback,
     EphemerisLoggerCallback,
     DetailedAnalysisCallback,
+    ModelSaveCallback,
+    EvalCallbackWithReplayBuffer,
 )
 from utils.system_info import patch_sb3_system_info
 from utils.matlab_templates import render_matlab_script
@@ -175,10 +177,18 @@ class SACTrainer:
             state.setdefault("captures", stats.get("captures"))
             state.setdefault("evasions", stats.get("evasions"))
             state.setdefault("permanent_evasions", stats.get("permanent_evasions"))
-            state.setdefault("conditional_evasions", stats.get("conditional_evasions"))
-            state.setdefault("temporary_evasions", stats.get("temporary_evasions"))
+            legacy_conditional = stats.get("conditional_evasions") or 0
+            legacy_temporary = stats.get("temporary_evasions") or 0
+            if legacy_conditional or legacy_temporary:
+                state["permanent_evasions"] = (state.get("permanent_evasions") or 0) + legacy_conditional + legacy_temporary
             state.setdefault("fuel_depleted", stats.get("fuel_depleted"))
             state.setdefault("max_steps", stats.get("max_steps"))
+            if state.get("evasions") is None:
+                evasion_total = stats.get("evasions")
+                if evasion_total is not None:
+                    state["evasions"] = evasion_total
+                elif state.get("permanent_evasions") is not None:
+                    state["evasions"] = state["permanent_evasions"]
             if not state.get("evader_delta_vs"):
                 state["evader_delta_vs"] = stats.get("evader_delta_v", [])
             if not state.get("episodes_info"):
@@ -210,7 +220,6 @@ class SACTrainer:
             counts = {
                 "captured": 0,
                 "permanent_evasion": 0,
-                "conditional_evasion": 0,
                 "fuel_depleted": 0,
                 "max_steps": 0,
             }
@@ -218,6 +227,8 @@ class SACTrainer:
                 outcome = self._normalize_outcome_key(info.get("outcome", "unknown"))
                 if outcome in counts:
                     counts[outcome] += 1
+                elif outcome in ("conditional_evasion", "temporary_evasion"):
+                    counts["permanent_evasion"] += 1
             state["outcome_counts"] = counts
 
         # 총 에피소드 수 보완
@@ -292,10 +303,11 @@ class SACTrainer:
             'capture': 'captured',
             'permanent evasion': 'permanent_evasion',
             'permanent_evasion': 'permanent_evasion',
-            'conditional evasion': 'conditional_evasion',
-            'conditional_evasion': 'conditional_evasion',
-            'temporary evasion': 'temporary_evasion',
-            'temporary_evasion': 'temporary_evasion',
+            'conditional evasion': 'permanent_evasion',
+            'conditional_evasion': 'permanent_evasion',
+            'temporary evasion': 'permanent_evasion',
+            'temporary_evasion': 'permanent_evasion',
+            'evaded': 'permanent_evasion',
             'fuel depleted': 'fuel_depleted',
             'fuel_depleted': 'fuel_depleted',
             'max steps': 'max_steps',
@@ -446,7 +458,7 @@ class SACTrainer:
         # 5. 평가 콜백 (best 모델 저장)
         eval_env = self._make_eval_env()
         eval_freq = max(1, getattr(self.training_config, "save_freq", 10000))
-        eval_callback = EvalCallback(
+        eval_callback = EvalCallbackWithReplayBuffer(
             eval_env,
             best_model_save_path=f"{self.log_dir}/models",
             log_path=f"{self.log_dir}/eval",
@@ -455,11 +467,23 @@ class SACTrainer:
             deterministic=True,
             render=False,
             verbose=1,
+            save_replay_buffer=True,
         )
         self.callbacks.append(eval_callback)
         self._eval_env_ref = eval_env
 
-        # 6. 조기 종료 (선택적)
+        # 6. 주기적 체크포인트 저장 (최신 모델 유지)
+        checkpoint_callback = ModelSaveCallback(
+            save_freq=max(1, getattr(self.training_config, "save_freq", 10000)),
+            save_path=f"{self.log_dir}/models",
+            name_prefix="sac_final",
+            verbose=1,
+            save_replay_buffer=True,
+            overwrite_latest=True,
+        )
+        self.callbacks.append(checkpoint_callback)
+
+        # 7. 조기 종료 (선택적)
         if hasattr(self.training_config, "early_stopping") and self.training_config.early_stopping:
             early_stopping_callback = EarlyStoppingCallback(
                 target_success_rate=0.8, 
@@ -623,12 +647,10 @@ class SACTrainer:
 
             # 성공 여부 판단
             if "outcome" in info:
-                success = info["outcome"] in [
-                    "permanent_evasion",
-                    "conditional_evasion",
-                    "max_steps_reached",
-                ]
-                if success:
+                outcome = str(info["outcome"]).lower()
+                if outcome in ("conditional_evasion", "temporary_evasion"):
+                    outcome = "permanent_evasion"
+                if outcome in ["permanent_evasion", "max_steps_reached"]:
                     results["success_count"] += 1
 
             print(f"에피소드 {episode+1}: 보상={episode_reward:.2f}, 길이={episode_length}")

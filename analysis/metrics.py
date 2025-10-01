@@ -236,10 +236,10 @@ def calculate_safety_metrics(states: np.ndarray, info: Dict[str, Any]) -> Dict[s
     metrics['safety_score'] = safety_score
     
     # 안전성 카테고리 분류
-    if safety_score > SAFETY_THRESHOLDS['permanent_evasion']:
-        metrics['safety_category'] = 3  # 영구 회피
-    elif safety_score > SAFETY_THRESHOLDS['conditional_evasion']:
-        metrics['safety_category'] = 2  # 조건부 회피
+    if safety_score >= SAFETY_THRESHOLDS['permanent_evasion']:
+        metrics['safety_category'] = 3  # 안정적인 회피
+    elif safety_score >= SAFETY_THRESHOLDS.get('evaded', SAFETY_THRESHOLDS['permanent_evasion']):
+        metrics['safety_category'] = 2  # 회피 유지
     else:
         metrics['safety_category'] = 1  # 위험
     

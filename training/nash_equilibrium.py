@@ -102,8 +102,6 @@ class NashEquilibriumTrainer(SACTrainer):
         outcomes = {
             'captured': 0,
             'permanent_evasion': 0,
-            'conditional_evasion': 0,
-            'temporary_evasion': 0,
             'fuel_depleted': 0,
             'max_steps_reached': 0
         }
@@ -126,10 +124,12 @@ class NashEquilibriumTrainer(SACTrainer):
                 episode_reward += reward
             
             # 결과 기록
-            outcome = info.get('outcome', 'unknown')
+            outcome = str(info.get('outcome', 'unknown')).lower()
+            if outcome in ('conditional_evasion', 'temporary_evasion'):
+                outcome = 'permanent_evasion'
             if outcome in outcomes:
                 outcomes[outcome] += 1
-            
+
             # 추격자 성공 시 전략 기록
             if outcome in ['captured', 'fuel_depleted']:
                 if hasattr(self.env, 'pursuer_last_action'):
@@ -151,7 +151,7 @@ class NashEquilibriumTrainer(SACTrainer):
             # 진행 상황 출력
             if (episode + 1) % max(1, episodes // 10) == 0:
                 capture_rate = outcomes['captured'] / (episode + 1) * 100
-                evade_rate = (outcomes['permanent_evasion'] + outcomes['conditional_evasion']) / (episode + 1) * 100
+                evade_rate = outcomes['permanent_evasion'] / (episode + 1) * 100
                 print(f"진행률: {(episode+1)/episodes*100:.1f}% - 포획률: {capture_rate:.1f}%, 회피률: {evade_rate:.1f}%")
         
         # 결과 분석
@@ -160,7 +160,7 @@ class NashEquilibriumTrainer(SACTrainer):
             'total_episodes': total_episodes,
             'outcomes': outcomes,
             'capture_rate': outcomes['captured'] / total_episodes if total_episodes > 0 else 0,
-            'evasion_rate': (outcomes['permanent_evasion'] + outcomes['conditional_evasion']) / total_episodes if total_episodes > 0 else 0,
+            'evasion_rate': outcomes['permanent_evasion'] / total_episodes if total_episodes > 0 else 0,
             'successful_strategies_count': len(successful_strategies),
             'strategy_diversity': self.analyze_strategy_diversity(successful_strategies)
         }
