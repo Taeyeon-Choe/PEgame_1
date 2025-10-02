@@ -53,8 +53,8 @@ ENV_PARAMS = {
     "shape_alphas": [0.01, 0.005],
     "pursuer_policy": "tvlqr",  # "heuristic" or "tvlqr"
     "lqr_horizon": 10,
-    "lqr_Q_diag": [0.001, 0.001, 0.001, 0.05, 0.05, 0.05],
-    "lqr_QN_diag": [0.005, 0.005, 0.005, 0.1, 0.1, 0.1],
+    "lqr_Q_diag": [0.0001, 0.0001, 0.0001, 0.05, 0.05, 0.05],
+    "lqr_QN_diag": [0.0005, 0.0005, 0.0005, 0.01, 0.01, 0.01],
     "lqr_R_diag": [1e-2, 1e-2, 1e-2],
 }
 
@@ -69,7 +69,7 @@ BUFFER_PARAMS = {
 TRAINING_PARAMS = {
     "total_timesteps": 100000,
     "nash_total_timesteps": 50000,
-    "learning_rate": 0.0003,
+    "learning_rate": 0.0005,
     "buffer_size": 1000000,
     "batch_size": 512,
     "tau": 0.003,

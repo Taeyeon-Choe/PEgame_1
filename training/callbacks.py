@@ -47,6 +47,43 @@ def _json_ready(value):
     return value
 
 
+class LogStdClampCallback(BaseCallback):
+    """Keep gSDE log_std finite to avoid NaN exploration noise."""
+
+    def __init__(
+        self,
+        min_value: float = -8.0,
+        max_value: float = 2.0,
+        reset_value: float = -3.0,
+        verbose: int = 0,
+    ) -> None:
+        super().__init__(verbose)
+        self.min_value = float(min_value)
+        self.max_value = float(max_value)
+        self.reset_value = float(reset_value)
+
+    def _on_step(self) -> bool:
+        policy = getattr(self.model, "policy", None)
+        actor = getattr(policy, "actor", None)
+        log_std = getattr(actor, "log_std", None)
+
+        if actor is None or not getattr(actor, "use_sde", False) or log_std is None:
+            return True
+
+        with torch.no_grad():
+            if torch.isnan(log_std).any():
+                torch.nan_to_num_(
+                    log_std,
+                    nan=self.reset_value,
+                    posinf=self.max_value,
+                    neginf=self.min_value,
+                )
+                if self.verbose > 0:
+                    print("[LogStdClamp] NaN detected in gSDE log_std; values reset")
+            log_std.clamp_(self.min_value, self.max_value)
+        return True
+
+
 class EvasionTrackingCallback(BaseCallback):
     """회피 결과 추적 콜백 (벡터 환경 완전 지원)"""
     
@@ -76,6 +113,7 @@ class EvasionTrackingCallback(BaseCallback):
         self.evader_rewards = []
         self.pursuer_rewards = []
         self.nash_equilibrium_metrics = []
+        self.episode_rewards = []
         
         # 그래프 저장 디렉토리
         self.log_dir = log_dir or f"./training_plots/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -150,12 +188,27 @@ class EvasionTrackingCallback(BaseCallback):
         # 보상 정보
         evader_reward = termination_details.get('evader_reward', info.get('evader_reward', 0))
         pursuer_reward = termination_details.get('pursuer_reward', info.get('pursuer_reward', 0))
-        
+        episode_data = info.get('episode')
+        episode_reward = None
+        if isinstance(episode_data, dict):
+            episode_reward = episode_data.get('r')
+        if episode_reward is None:
+            episode_reward = termination_details.get('evader_total_reward') if termination_details else None
+        if episode_reward is None:
+            episode_reward = info.get('evader_total_reward')
+        if episode_reward is None:
+            episode_reward = evader_reward
+        try:
+            episode_reward = float(episode_reward)
+        except (TypeError, ValueError):
+            episode_reward = float(evader_reward)
+
         # 각종 메트릭 업데이트
         self._update_outcome_counts(outcome)
         self.evader_rewards.append(evader_reward)
         self.pursuer_rewards.append(pursuer_reward)
         self.nash_equilibrium_metrics.append(info.get('nash_metric', 0))
+        self.episode_rewards.append(episode_reward)
         
         # 버퍼 시간 기록
         buffer_time = termination_details.get('buffer_time', info.get('buffer_time', 0))
@@ -425,6 +478,7 @@ class EvasionTrackingCallback(BaseCallback):
         self.evader_rewards = [float(x) for x in data.get("evader_rewards", self.evader_rewards)]
         self.pursuer_rewards = [float(x) for x in data.get("pursuer_rewards", self.pursuer_rewards)]
         self.nash_equilibrium_metrics = [float(x) for x in data.get("nash_metrics", self.nash_equilibrium_metrics)]
+        self.episode_rewards = [float(x) for x in data.get("episode_rewards", self.episode_rewards)]
         self.buffer_time_stats = [float(x) for x in data.get("buffer_times", self.buffer_time_stats)]
         self.evader_delta_vs = [float(x) for x in data.get("evader_delta_vs", self.evader_delta_vs)]
 
@@ -501,6 +555,7 @@ class EvasionTrackingCallback(BaseCallback):
             "pursuer_rewards": self.pursuer_rewards,
             "nash_metrics": self.nash_equilibrium_metrics,
             "buffer_times": self.buffer_time_stats,
+            "episode_rewards": self.episode_rewards[-self.success_window.maxlen:] if self.episode_rewards else [],
             "evader_delta_vs": self.evader_delta_vs,
             "recent_delta_v": list(self.delta_v_window),
             "episodes_info": self.episodes_info[-100:],
@@ -1444,12 +1499,37 @@ class DetailedAnalysisCallback(BaseCallback):
         final_distances = [ep['final_distance'] for ep in self.all_episodes_data]
         total_evader_dvs = [ep['total_evader_dv'] for ep in self.all_episodes_data]
         total_pursuer_dvs = [ep['total_pursuer_dv'] for ep in self.all_episodes_data]
-        
+
+        def _auto_ylim(ax, values, *, log_scale=False):
+            finite_vals = [float(v) for v in values if np.isfinite(v)]
+            if not finite_vals:
+                return
+
+            vmin = min(finite_vals)
+            vmax = max(finite_vals)
+
+            if log_scale:
+                vmin = max(vmin, 1e-6)
+                if vmin == vmax:
+                    vmin *= 0.9
+                    vmax *= 1.1
+                lower = max(vmin / 1.05, 1e-6)
+                upper = max(lower * 1.001, vmax * 1.05)
+                ax.set_ylim(lower, upper)
+            else:
+                if vmin == vmax:
+                    delta = abs(vmin) * 0.1 or 1.0
+                else:
+                    delta = (vmax - vmin) * 0.05
+                    if delta == 0:
+                        delta = max(abs(vmax), abs(vmin), 1.0) * 0.05
+                ax.set_ylim(vmin - delta, vmax + delta)
+
         # 색상 맵 (환경별로 다른 마커)
         env_markers = ['o', 's', '^', 'v', '<', '>', 'p', '*', 'h', 'D', 'd', 'P', 'X', '8', '|', '_']
-        
+
         plt.figure(figsize=(15, 10))
-        
+
         # 1. 최종 거리 분포 (환경별로 다른 마커)
         plt.subplot(2, 2, 1)
         for env_id in sorted(set(env_ids)):
@@ -1468,9 +1548,10 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.title('Final Distance per Episode (All Environments)')
         plt.yscale('log')
         plt.grid(True, alpha=0.3)
+        _auto_ylim(plt.gca(), final_distances, log_scale=True)
         if len(set(env_ids)) <= 8:  # 환경이 8개 이하일 때만 범례 표시
             plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
-        
+
         # 2. 회피자 연료 사용량
         plt.subplot(2, 2, 2)
         plt.scatter(episodes, total_evader_dvs, c=env_ids, cmap='tab20', alpha=0.6, s=30)
@@ -1479,7 +1560,8 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.title('Evader Fuel Usage per Episode')
         plt.grid(True, alpha=0.3)
         plt.colorbar(label='Environment ID')
-        
+        _auto_ylim(plt.gca(), total_evader_dvs)
+
         # 3. 추격자 연료 사용량
         plt.subplot(2, 2, 3)
         plt.scatter(episodes, total_pursuer_dvs, c=env_ids, cmap='tab20', alpha=0.6, s=30)
@@ -1488,6 +1570,7 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.title('Pursuer Fuel Usage per Episode')
         plt.grid(True, alpha=0.3)
         plt.colorbar(label='Environment ID')
+        _auto_ylim(plt.gca(), total_pursuer_dvs)
         
         # 4. 결과 분포
         plt.subplot(2, 2, 4)

@@ -28,6 +28,7 @@ from training.callbacks import (
     DetailedAnalysisCallback,
     ModelSaveCallback,
     EvalCallbackWithReplayBuffer,
+    LogStdClampCallback,
 )
 from utils.system_info import patch_sb3_system_info
 from utils.matlab_templates import render_matlab_script
@@ -388,7 +389,7 @@ class SACTrainer:
             "ent_coef": "auto",
             "target_update_interval": 1,
             "target_entropy": "auto",
-            "use_sde": False,
+            "use_sde": True,
             "use_sde_at_warmup": False,
             "tensorboard_log": f"{self.log_dir}/tensorboard",
             "policy_kwargs": policy_kwargs,
@@ -419,6 +420,10 @@ class SACTrainer:
     def setup_callbacks(self, custom_callbacks: Optional[List] = None):
         """콜백 설정"""
         self.callbacks = []
+
+        # 0. gSDE log_std 안전장치
+        log_std_guard = LogStdClampCallback(verbose=0)
+        self.callbacks.append(log_std_guard)
 
         # 1. 성능 추적 콜백 (plots 저장 포함)
         shared_resume = self.resume_state.get("shared") if self.resume_mode else None
