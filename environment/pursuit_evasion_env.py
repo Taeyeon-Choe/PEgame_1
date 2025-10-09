@@ -98,6 +98,7 @@ class PursuitEvasionEnv(gym.Env):
         self.state = None
         self.pursuer_last_action = np.zeros(3, dtype=np.float32)
         self.reward_history = []
+        self.reward_term_totals: Optional[Dict[str, float]] = None
 
         # Zero-Sum 게임 관련
         self.zero_sum = True
@@ -371,6 +372,19 @@ class PursuitEvasionEnv(gym.Env):
 
         # Nash Equilibrium 관련 변수 초기화
         self.nash_metric = 0.0
+
+        reward_mode = getattr(self.config, "reward_mode", "original")
+        if reward_mode in ("lq_zero_sum", "lq_zero_sum_shaped"):
+            self.reward_term_totals = {
+                "state_cost": 0.0,
+                "pursuer_control_cost": 0.0,
+                "evader_control_penalty": 0.0,
+                "terminal_cost": 0.0,
+                "event_constant": 0.0,
+                "potential_shaping": 0.0,
+            }
+        else:
+            self.reward_term_totals = None
 
         # 물리적 궤도 업데이트 추적 변수 초기화
         self.evader_impulse_history = []
@@ -1056,6 +1070,38 @@ class PursuitEvasionEnv(gym.Env):
 
         return evader_reward, pursuer_reward, info
 
+    def _compute_huber_state_cost(
+        self,
+        state_vec: np.ndarray,
+        Q: np.ndarray,
+        pos_delta: float,
+        vel_delta: float,
+    ) -> float:
+        """Huber 스케일링이 적용된 상태 비용 계산"""
+        state_vec = np.asarray(state_vec, dtype=np.float64).reshape(-1)
+        pos = np.array(state_vec[:3], dtype=np.float64, copy=True)
+        vel = np.array(state_vec[3:6], dtype=np.float64, copy=True)
+
+        def _huber_quadratic(value: float, delta: float) -> float:
+            delta = float(delta)
+            if delta <= 0.0:
+                return value * value
+            abs_v = abs(value)
+            if abs_v <= delta:
+                return value * value
+            return 2.0 * delta * abs_v - delta * delta
+
+        cost = 0.0
+        pos_delta = float(pos_delta)
+        vel_delta = float(vel_delta)
+        for idx in range(3):
+            cost += Q[idx, idx] * _huber_quadratic(pos[idx], pos_delta)
+        for idx in range(3):
+            j = idx + 3
+            cost += Q[j, j] * _huber_quadratic(vel[idx], vel_delta)
+
+        return float(cost)
+
     def _calculate_rewards_lq(self, done: bool, termination_info: Dict, shaped: bool) -> Tuple[float, float, Dict]:
         """LQ 제로섬 보상 + 선택적 shaping"""
         termination_info = termination_info or {}
@@ -1076,37 +1122,181 @@ class PursuitEvasionEnv(gym.Env):
         re_diag = getattr(self.config, "lqr_RE_diag", self.config.lqr_R_diag)
         RE = np.diag(np.asarray(re_diag, dtype=np.float64))
 
-        state_cost = float(x_k.T @ Q @ x_k)
-        pursuer_control_cost = float(uP_k.T @ RP @ uP_k)
-        evader_control_penalty = float(uE_k.T @ RE @ uE_k)
-        stage_cost = state_cost + pursuer_control_cost - evader_control_penalty
+        use_huber = bool(getattr(self.config, "use_huber_stage", False))
+        if use_huber:
+            pos_delta_cfg = getattr(self.config, "stage_huber_pos_delta", None)
+            if pos_delta_cfg is None or float(pos_delta_cfg) <= 0.0:
+                pos_delta_value = float(getattr(self.config, "evasion_distance", 0.0))
+            else:
+                pos_delta_value = float(pos_delta_cfg)
+            state_cost_raw = self._compute_huber_state_cost(
+                x_k,
+                Q,
+                pos_delta_value,
+                float(getattr(self.config, "stage_huber_vel_delta", 0.0)),
+            )
+        else:
+            state_cost_raw = float(x_k.T @ Q @ x_k)
+        state_cost_unscaled = state_cost_raw
 
-        rE = stage_cost
-        rP = -stage_cost
+        use_rayleigh_scaling = bool(getattr(self.config, "use_rayleigh_stage_scaling", False))
+        stage_rayleigh_factor = 1.0
+        stage_rayleigh_scale = getattr(self.config, "stage_rayleigh_scale", None)
+        stage_rayleigh_input = state_cost_unscaled
+        if use_rayleigh_scaling:
+            scale_value: Optional[float]
+            scale_cfg = stage_rayleigh_scale
+            if scale_cfg is None:
+                q_diag = np.diag(Q)
+                pos_q = q_diag[:3]
+                mean_pos_q = float(np.mean(pos_q)) if pos_q.size > 0 else float(np.mean(q_diag))
+                ref_distance = float(getattr(self.config, "evasion_distance", 0.0))
+                if ref_distance > 0.0 and mean_pos_q > 0.0:
+                    scale_value = ref_distance ** 2 * mean_pos_q
+                else:
+                    scale_value = max(state_cost_unscaled, 1.0)
+            else:
+                try:
+                    scale_value = float(scale_cfg)
+                except (TypeError, ValueError):
+                    scale_value = None
+            if scale_value is None or scale_value <= 0.0:
+                stage_rayleigh_factor = 1.0
+                stage_rayleigh_scale = None
+            else:
+                stage_rayleigh_scale = scale_value
+                # Rayleigh CDF evaluated at x'Qx
+                ratio = float(stage_rayleigh_input / scale_value)
+                stage_rayleigh_factor = 1.0 - math.exp(-0.5 * ratio * ratio)
+            state_cost_raw = stage_rayleigh_factor
+        else:
+            stage_rayleigh_scale = stage_rayleigh_scale
+
+        pursuer_control_cost_raw = float(uP_k.T @ RP @ uP_k)
+        evader_control_penalty_raw = float(uE_k.T @ RE @ uE_k)
+
+        stage_weight = float(getattr(self.config, "reward_stage_weight", 1.0))
+        weighted_state_cost = stage_weight * state_cost_raw
+        weighted_pursuer_cost = stage_weight * pursuer_control_cost_raw
+        evader_penalty_weighted = stage_weight * evader_control_penalty_raw
+        weighted_evader_penalty = -evader_penalty_weighted
+
+        stage_cost_raw = state_cost_raw + pursuer_control_cost_raw - evader_control_penalty_raw
+        stage_cost_weighted = weighted_state_cost + weighted_pursuer_cost + weighted_evader_penalty
+
+        tracking_terms = self.reward_term_totals is not None
+        if tracking_terms:
+            self.reward_term_totals["state_cost"] += weighted_state_cost
+            self.reward_term_totals["pursuer_control_cost"] += weighted_pursuer_cost
+            self.reward_term_totals["evader_control_penalty"] += weighted_evader_penalty
+
+        rE = stage_cost_weighted
+        rP = -stage_cost_weighted
 
         info = dict(termination_info) if done else {}
         info.update({
-            "Jp_stage": state_cost + pursuer_control_cost,
-            "Je_stage": evader_control_penalty,
-            "stage_cost": stage_cost,
+            "Jp_stage": state_cost_raw + pursuer_control_cost_raw,
+            "Je_stage": evader_control_penalty_raw,
+            "stage_cost_raw": stage_cost_raw,
+            "stage_cost": stage_cost_weighted,
+            "stage_weight": stage_weight,
+            "state_cost_raw": state_cost_raw,
+            "state_cost_weighted": weighted_state_cost,
+            "state_cost_unscaled": state_cost_unscaled,
+            "use_rayleigh_stage_scaling": use_rayleigh_scaling,
+            "stage_rayleigh_factor": stage_rayleigh_factor,
+            "stage_rayleigh_input": stage_rayleigh_input,
+            "stage_rayleigh_scale": stage_rayleigh_scale,
+            "pursuer_control_cost_raw": pursuer_control_cost_raw,
+            "pursuer_control_cost_weighted": weighted_pursuer_cost,
+            "evader_control_penalty_raw": evader_control_penalty_raw,
+            "evader_control_penalty_weighted": evader_penalty_weighted,
+            "use_huber_stage": use_huber,
         })
 
+        terminal_weight = float(getattr(self.config, "reward_terminal_weight", 1.0))
+        terminal_cost_raw = 0.0
         terminal_cost = 0.0
+        terminal_cost_unscaled = 0.0
+        terminal_rayleigh_factor = 1.0
+        terminal_rayleigh_scale = getattr(self.config, "terminal_rayleigh_scale", None)
+        terminal_rayleigh_input = 0.0
+        use_huber_terminal = bool(getattr(self.config, "use_huber_terminal", False))
+        use_rayleigh_terminal = bool(getattr(self.config, "use_rayleigh_terminal_scaling", False))
         if done:
-            terminal_cost = float(x_k1.T @ QN @ x_k1)
+            if use_huber_terminal:
+                term_pos_delta_cfg = getattr(self.config, "terminal_huber_pos_delta", None)
+                if term_pos_delta_cfg is None or float(term_pos_delta_cfg) <= 0.0:
+                    term_pos_delta_value = float(getattr(self.config, "evasion_distance", 0.0))
+                else:
+                    term_pos_delta_value = float(term_pos_delta_cfg)
+                terminal_cost_raw = self._compute_huber_state_cost(
+                    x_k1,
+                    QN,
+                    term_pos_delta_value,
+                    float(getattr(self.config, "terminal_huber_vel_delta", 0.0)),
+                )
+            else:
+                terminal_cost_raw = float(x_k1.T @ QN @ x_k1)
+            terminal_cost_unscaled = terminal_cost_raw
+            terminal_rayleigh_input = terminal_cost_unscaled
+
+            if use_rayleigh_terminal:
+                scale_cfg = terminal_rayleigh_scale
+                if scale_cfg is None:
+                    qn_diag = np.diag(QN)
+                    pos_qn = qn_diag[:3]
+                    mean_pos_qn = float(np.mean(pos_qn)) if pos_qn.size > 0 else float(np.mean(qn_diag))
+                    ref_distance = float(getattr(self.config, "evasion_distance", 0.0))
+                    if ref_distance > 0.0 and mean_pos_qn > 0.0:
+                        scale_value = ref_distance ** 2 * mean_pos_qn
+                    else:
+                        scale_value = max(terminal_cost_unscaled, 1.0)
+                else:
+                    try:
+                        scale_value = float(scale_cfg)
+                    except (TypeError, ValueError):
+                        scale_value = None
+                if scale_value is None or scale_value <= 0.0:
+                    terminal_rayleigh_factor = 1.0
+                    terminal_rayleigh_scale = None
+                else:
+                    terminal_rayleigh_scale = scale_value
+                    ratio = float(terminal_rayleigh_input / scale_value)
+                    terminal_rayleigh_factor = 1.0 - math.exp(-0.5 * ratio * ratio)
+                terminal_cost_raw = terminal_rayleigh_factor
+
+            terminal_cost = terminal_weight * terminal_cost_raw
             rE += terminal_cost
             rP -= terminal_cost
+        info["terminal_cost_raw"] = terminal_cost_raw
         info["terminal_cost"] = terminal_cost
+        info["terminal_cost_unscaled"] = terminal_cost_unscaled
+        info["use_rayleigh_terminal_scaling"] = use_rayleigh_terminal
+        info["terminal_rayleigh_factor"] = terminal_rayleigh_factor
+        info["terminal_rayleigh_input"] = terminal_rayleigh_input
+        info["terminal_rayleigh_scale"] = terminal_rayleigh_scale
+        info["terminal_weight"] = terminal_weight
+        info["use_huber_terminal"] = use_huber_terminal
+        if tracking_terms:
+            self.reward_term_totals["terminal_cost"] += terminal_cost
 
+        event_weight = float(getattr(self.config, "reward_event_weight", 1.0))
+        event_constant_raw = 0.0
         event_constant = 0.0
         if done and termination_info:
             evt_e = float(termination_info.get("evader_reward", 0.0))
             evt_p = float(termination_info.get("pursuer_reward", 0.0))
             if math.isfinite(evt_e) and math.isfinite(evt_p):
-                event_constant = 0.5 * (evt_e - evt_p)
+                event_constant_raw = 0.5 * (evt_e - evt_p)
+                event_constant = event_weight * event_constant_raw
                 rE += event_constant
                 rP -= event_constant
+        info["event_constant_raw"] = event_constant_raw
         info["event_constant"] = event_constant
+        info["event_weight"] = event_weight
+        if tracking_terms:
+            self.reward_term_totals["event_constant"] += event_constant
 
         dphi = 0.0
         if shaped:
@@ -1139,11 +1329,18 @@ class PursuitEvasionEnv(gym.Env):
                 "phi_next": phi_k1,
             })
         info["dPhi"] = dphi
+        if tracking_terms:
+            self.reward_term_totals["potential_shaping"] += dphi
 
         info["evader_reward"] = rE
         info["pursuer_reward"] = rP
         info["rE_lq"] = rE
         info["rP_lq"] = rP
+
+        if done and tracking_terms:
+            breakdown = {key: float(value) for key, value in self.reward_term_totals.items()}
+            termination_info["evader_reward_breakdown"] = breakdown
+            info["evader_reward_breakdown"] = breakdown
 
         return rE, rP, info
 

@@ -367,15 +367,22 @@ class ModelEvaluator:
             'individual_results': results
         }
 
-        macro_counts = aggregate_outcome_counts(outcome_types)
+        macro_counts, evaded_breakdown = aggregate_outcome_counts(
+            outcome_types,
+            include_breakdown=True,
+        )
         if macro_counts:
             comprehensive_results['macro_outcome_distribution'] = macro_counts
+            if evaded_breakdown:
+                comprehensive_results['evaded_breakdown'] = evaded_breakdown
+
             comprehensive_results['summary']['captured_macro'] = macro_counts.get('Captured', 0)
-            comprehensive_results['summary']['evaded_macro'] = macro_counts.get(
-                'Evaded (incl. max steps)',
-                macro_counts.get('Evaded', 0),
-            )
-            comprehensive_results['summary']['max_steps_cases'] = macro_counts.get('Max Steps', 0)
+            comprehensive_results['summary']['evaded_macro'] = macro_counts.get('Evaded', 0)
+            comprehensive_results['summary']['fuel_depleted_macro'] = macro_counts.get('Fuel Depleted', 0)
+
+            # 세부 회피 통계 (최대 스텝 포함)
+            max_steps_cases = evaded_breakdown.get('Max Steps', outcome_types.get('max_steps_reached', 0))
+            comprehensive_results['summary']['max_steps_cases'] = max_steps_cases
 
         return comprehensive_results
     
@@ -449,12 +456,14 @@ class ModelEvaluator:
         
         # 4. 시각화 생성
         macro_counts = comprehensive_results.get('macro_outcome_distribution')
+        evaded_breakdown = comprehensive_results.get('evaded_breakdown')
         plot_test_results(
             results,
             zero_sum_metrics,
             outcome_types,
             save_dir,
             macro_counts=macro_counts,
+            evaded_breakdown=evaded_breakdown,
         )
         
         # 5. 대시보드 생성
@@ -493,20 +502,22 @@ class ModelEvaluator:
             f.write(f"성공률: {summary['success_rate']:.1f}%\n\n")
 
             macro = results.get('macro_outcome_distribution', {})
+            evaded_breakdown = results.get('evaded_breakdown', {})
             if macro:
                 captured_macro = macro.get('Captured', 0)
-                evaded_macro = macro.get('Evaded (incl. max steps)', macro.get('Evaded', 0))
-                max_steps_cases = macro.get('Max Steps', 0)
+                evaded_macro = macro.get('Evaded', 0)
+                fuel_macro = macro.get('Fuel Depleted', 0)
+                other_macro = macro.get('Other', 0)
 
                 f.write("=== 대분류 결과 ===\n")
                 f.write(f"Captured: {captured_macro}\n")
-                f.write(f"Evaded (incl. max steps): {evaded_macro}\n")
-                if 'Fuel Depleted' in macro:
-                    f.write(f"Fuel Depleted: {macro['Fuel Depleted']}\n")
-                if 'Other' in macro:
-                    f.write(f"Other: {macro['Other']}\n")
-                if max_steps_cases:
-                    f.write(f" └ Max Steps 포함: {max_steps_cases}\n")
+                f.write(f"Evaded: {evaded_macro}\n")
+                f.write(f"Fuel Depleted: {fuel_macro}\n")
+                if other_macro:
+                    f.write(f"Other: {other_macro}\n")
+                if evaded_breakdown:
+                    for label, count in evaded_breakdown.items():
+                        f.write(f" └ {label}: {count}\n")
                 f.write("\n")
 
             f.write("=== 성능 지표 ===\n")

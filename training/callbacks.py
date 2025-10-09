@@ -8,7 +8,7 @@ import datetime
 import os
 import copy
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List, Callable
 from collections import deque, Counter
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 import torch
@@ -114,6 +114,7 @@ class EvasionTrackingCallback(BaseCallback):
         self.pursuer_rewards = []
         self.nash_equilibrium_metrics = []
         self.episode_rewards = []
+        self.reward_breakdowns: List[Dict[str, float]] = []
         
         # 그래프 저장 디렉토리
         self.log_dir = log_dir or f"./training_plots/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
@@ -209,6 +210,17 @@ class EvasionTrackingCallback(BaseCallback):
         self.pursuer_rewards.append(pursuer_reward)
         self.nash_equilibrium_metrics.append(info.get('nash_metric', 0))
         self.episode_rewards.append(episode_reward)
+
+        breakdown = termination_details.get('evader_reward_breakdown') or info.get('evader_reward_breakdown') or {}
+        normalized_breakdown: Dict[str, float] = {}
+        if isinstance(breakdown, dict):
+            for key, value in breakdown.items():
+                try:
+                    normalized_breakdown[str(key)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+        # keep length aligned with episodes
+        self.reward_breakdowns.append(normalized_breakdown)
         
         # 버퍼 시간 기록
         buffer_time = termination_details.get('buffer_time', info.get('buffer_time', 0))
@@ -244,6 +256,7 @@ class EvasionTrackingCallback(BaseCallback):
                 info.get('relative_distance') or 0
             ),
             'total_evader_delta_v': total_evader_dv,
+            'reward_breakdown': normalized_breakdown,
         }
         self.episodes_info.append(episode_info)
         
@@ -304,26 +317,55 @@ class EvasionTrackingCallback(BaseCallback):
         print(f"에피소드 {self.episode_count} - 성공률(최근 {len(self.success_window)}): {success_rate:.2%}")
         print(f"{'='*70}")
         print(
-            f"  - 결과 분포: 포획={self.captures}, 회피={self.permanent_evasions}, "
-            f"연료소진={self.fuel_depleted}, 최대스텝={self.max_steps}"
+            "  - 결과 분포: 포획={0}, 회피={1} (영구={2}, 최대스텝={3}), 연료소진={4}".format(
+                self.captures,
+                self.evasions,
+                self.permanent_evasions,
+                self.max_steps,
+                self.fuel_depleted,
+            )
         )
 
-        macro_counts = aggregate_outcome_counts({
-            'captured': self.captures,
-            'permanent_evasion': self.permanent_evasions,
-            'fuel_depleted': self.fuel_depleted,
-            'max_steps_reached': self.max_steps,
-        })
-        if macro_counts:
-            total_macro = max(sum(macro_counts.values()), 1)
-            captured_macro = macro_counts.get('Captured', 0)
-            evaded_macro = macro_counts.get('Evaded (incl. max steps)', macro_counts.get('Evaded', 0))
-            print(f"  - 대분류: Captured={captured_macro} ({captured_macro/total_macro:.1%}), "
-                  f"Evaded={evaded_macro} ({evaded_macro/total_macro:.1%})")
-            if 'Fuel Depleted' in macro_counts:
-                print(f"    · Fuel depleted: {macro_counts['Fuel Depleted']}")
-            if 'Other' in macro_counts:
-                print(f"    · Other: {macro_counts['Other']}")
+        summary_counts, evaded_breakdown = aggregate_outcome_counts(
+            {
+                'captured': self.captures,
+                'permanent_evasion': self.permanent_evasions,
+                'fuel_depleted': self.fuel_depleted,
+                'max_steps_reached': self.max_steps,
+            },
+            include_breakdown=True,
+        )
+        if summary_counts:
+            total_macro = max(sum(summary_counts.values()), 1)
+            captured_macro = summary_counts.get('Captured', 0)
+            evaded_macro = summary_counts.get('Evaded', 0)
+            fuel_macro = summary_counts.get('Fuel Depleted', 0)
+            other_macro = summary_counts.get('Other', 0)
+            print(
+                "  - Captured={0} ({1:.1%}), Evaded={2} ({3:.1%}), Fuel Depleted={4} ({5:.1%})".format(
+                    captured_macro,
+                    captured_macro / total_macro,
+                    evaded_macro,
+                    evaded_macro / total_macro,
+                    fuel_macro,
+                    fuel_macro / total_macro,
+                )
+            )
+            if other_macro:
+                print(
+                    "    · Other={0} ({1:.1%})".format(
+                        other_macro,
+                        other_macro / total_macro,
+                    )
+                )
+
+            if evaded_breakdown:
+                breakdown_total = max(sum(evaded_breakdown.values()), 1)
+                breakdown_str = ", ".join(
+                    f"{label}={count} ({count / breakdown_total:.1%})"
+                    for label, count in evaded_breakdown.items()
+                )
+                print(f"    · 회피 세부: {breakdown_str}")
 
         # 버퍼 시간 통계
         if self.buffer_time_stats:
@@ -398,7 +440,10 @@ class EvasionTrackingCallback(BaseCallback):
             'fuel_depleted': self.fuel_depleted,
             'max_steps_reached': self.max_steps,
         }
-        macro_counts = aggregate_outcome_counts(outcome_counts)
+        summary_counts, evaded_breakdown = aggregate_outcome_counts(
+            outcome_counts,
+            include_breakdown=True,
+        )
 
         try:
             plot_training_progress(
@@ -410,8 +455,10 @@ class EvasionTrackingCallback(BaseCallback):
                 buffer_times=[_json_ready(bt) for bt in self.buffer_time_stats],
                 episode_count=self.episode_count,
                 save_dir=self.log_dir,
-                macro_counts=macro_counts,
+                macro_counts=summary_counts,
                 episode_rewards=self.episode_rewards,
+                evaded_breakdown=evaded_breakdown,
+                reward_breakdowns=self.reward_breakdowns,
             )
 
             progress_csv = os.path.join(self.log_dir, 'progress.csv')
@@ -438,8 +485,15 @@ class EvasionTrackingCallback(BaseCallback):
             print("\n=== 학습 종료 - 최종 통계 ===")
             print(f"총 에피소드: {self.episode_count}")
             print(f"최종 성공률: {self.success_rates[-1]:.2%}" if self.success_rates else "N/A")
-            print(f"포획: {self.captures}, 회피: {self.evasions}")
-            print(f"영구 회피 판정: {self.permanent_evasions}")
+            print(
+                "포획: {0}, 회피: {1} (영구={2}, 최대스텝={3}), 연료 소진: {4}".format(
+                    self.captures,
+                    self.evasions,
+                    self.permanent_evasions,
+                    self.max_steps,
+                    self.fuel_depleted,
+                )
+            )
         
         # 최종 플롯 생성
         self.plot_interim_results()
@@ -456,6 +510,19 @@ class EvasionTrackingCallback(BaseCallback):
             "episodes_info": self.episodes_info[-100:],  # 마지막 100개만 저장
             "evader_delta_v": self.evader_delta_vs,
         }
+
+        if self.reward_breakdowns:
+            stats["reward_breakdowns"] = self.reward_breakdowns[-100:]
+
+        _, evaded_breakdown = aggregate_outcome_counts(
+            {
+                'permanent_evasion': self.permanent_evasions,
+                'max_steps_reached': self.max_steps,
+            },
+            include_breakdown=True,
+        )
+        if evaded_breakdown:
+            stats["evaded_breakdown"] = evaded_breakdown
         
         stats_path = os.path.join(self.log_dir, "evasion_stats.json")
         with open(stats_path, 'w') as f:
@@ -484,6 +551,27 @@ class EvasionTrackingCallback(BaseCallback):
 
         self.episodes_info = list(data.get("episodes_info", self.episodes_info))
         self.outcomes = [info.get('outcome', 'unknown') for info in self.episodes_info]
+
+        stored_breakdowns = data.get("reward_breakdowns")
+        self.reward_breakdowns = []
+        if isinstance(stored_breakdowns, list):
+            for entry in stored_breakdowns:
+                if isinstance(entry, dict):
+                    normalized: Dict[str, float] = {}
+                    for key, value in entry.items():
+                        try:
+                            normalized[str(key)] = float(value)
+                        except (TypeError, ValueError):
+                            continue
+                    self.reward_breakdowns.append(normalized)
+                else:
+                    self.reward_breakdowns.append({})
+        
+        n_eps = len(self.episode_rewards)
+        if len(self.reward_breakdowns) < n_eps:
+            self.reward_breakdowns.extend({} for _ in range(n_eps - len(self.reward_breakdowns)))
+        elif len(self.reward_breakdowns) > n_eps and n_eps > 0:
+            self.reward_breakdowns = self.reward_breakdowns[-n_eps:]
 
         self.captures = int(data.get("captures", self.captures) or self.captures)
         self.evasions = int(data.get("evasions", self.evasions) or self.evasions)
@@ -559,6 +647,7 @@ class EvasionTrackingCallback(BaseCallback):
             "evader_delta_vs": self.evader_delta_vs,
             "recent_delta_v": list(self.delta_v_window),
             "episodes_info": self.episodes_info[-100:],
+            "reward_breakdowns": self.reward_breakdowns[-100:] if self.reward_breakdowns else [],
             "outcome_counts": {
                 "captured": self.captures,
                 "permanent_evasion": self.permanent_evasions,
@@ -605,10 +694,28 @@ class PerformanceCallback(BaseCallback):
         self.window_size = 100
         self.success_window = deque(maxlen=self.window_size)
 
+        # 보상 분해 데이터 (선택적으로 외부 공급자 사용)
+        self.reward_breakdowns: Optional[List[Dict[str, float]]] = None
+        self._reward_breakdown_provider: Optional[Callable[[], Optional[List[Dict[str, float]]]]] = None
+
         if resume and resume_data:
             self._restore_from_resume(resume_data)
 
-    def _macro_outcome_counts(self) -> Dict[str, int]:
+    def set_reward_breakdown_source(self, provider: Callable[[], Optional[List[Dict[str, float]]]]) -> None:
+        """EvasionTrackingCallback 등에서 보상 분해 리스트를 공급받기 위한 설정."""
+        self._reward_breakdown_provider = provider
+
+    def _get_reward_breakdowns(self) -> Optional[List[Dict[str, float]]]:
+        if self._reward_breakdown_provider is not None:
+            try:
+                data = self._reward_breakdown_provider()
+                if data is not None:
+                    self.reward_breakdowns = data
+            except Exception:
+                pass
+        return self.reward_breakdowns
+
+    def _summary_outcome_counts(self) -> Dict[str, int]:
         if not self.outcome_counter:
             return {}
         raw = {str(key): int(value) for key, value in self.outcome_counter.items()}
@@ -691,19 +798,30 @@ class PerformanceCallback(BaseCallback):
                 print(f"  성공률(최근 {len(self.success_window)}): {success_rate:.1%}")
                 print(f"  Nash 메트릭: {self.nash_metrics[-1]:.3f}")
                 print(f"  타임스텝: {self.num_timesteps}")
-                macro_counts = self._macro_outcome_counts()
-                if macro_counts:
-                    total_macro = max(sum(macro_counts.values()), 1)
-                    captured_macro = macro_counts.get('Captured', 0)
-                    evaded_macro = macro_counts.get('Evaded (incl. max steps)', macro_counts.get('Evaded', 0))
+                summary_counts = self._summary_outcome_counts()
+                if summary_counts:
+                    total_macro = max(sum(summary_counts.values()), 1)
+                    captured_macro = summary_counts.get('Captured', 0)
+                    evaded_macro = summary_counts.get('Evaded', 0)
+                    fuel_macro = summary_counts.get('Fuel Depleted', 0)
+                    other_macro = summary_counts.get('Other', 0)
                     print(
-                        "  대분류 누적: Captured={0} ({1:.1%}), Evaded={2} ({3:.1%})".format(
+                        "  누적 결과: Captured={0} ({1:.1%}), Evaded={2} ({3:.1%}), Fuel Depleted={4} ({5:.1%})".format(
                             captured_macro,
                             captured_macro / total_macro,
                             evaded_macro,
                             evaded_macro / total_macro,
+                            fuel_macro,
+                            fuel_macro / total_macro,
                         )
                     )
+                    if other_macro:
+                        print(
+                            "    · Other={0} ({1:.1%})".format(
+                                other_macro,
+                                other_macro / total_macro,
+                            )
+                        )
 
             if self.episode_count % self.plot_freq == 0:
                 self._save_plots()
@@ -713,22 +831,27 @@ class PerformanceCallback(BaseCallback):
     def _save_plots(self):
         """플롯 저장"""
         try:
-            macro_counts = self._macro_outcome_counts()
-            permanent_total = sum(
-                self.outcome_counter.get(key, 0)
-                for key in (
-                    'permanent_evasion',
-                    'conditional_evasion',
-                    'temporary_evasion',
-                    'evaded',
-                )
+            summary_counts, evaded_breakdown = aggregate_outcome_counts(
+                {
+                    key: int(value)
+                    for key, value in self.outcome_counter.items()
+                },
+                include_breakdown=True,
             )
 
             plot_training_progress(
                 success_rates=self.success_rates,
                 outcome_counts={
                     'captured': self.outcome_counter.get('captured', 0),
-                    'permanent_evasion': permanent_total,
+                    'permanent_evasion': sum(
+                        self.outcome_counter.get(key, 0)
+                        for key in (
+                            'permanent_evasion',
+                            'conditional_evasion',
+                            'temporary_evasion',
+                            'evaded',
+                        )
+                    ),
                     'fuel_depleted': self.outcome_counter.get('fuel_depleted', 0),
                     'max_steps_reached': self.outcome_counter.get('max_steps_reached', 0),
                 },
@@ -738,8 +861,10 @@ class PerformanceCallback(BaseCallback):
                 buffer_times=self.buffer_times,
                 episode_count=self.episode_count,
                 save_dir=self.plot_dir,
-                macro_counts=macro_counts,
+                macro_counts=summary_counts,
                 episode_rewards=self.episode_rewards,
+                evaded_breakdown=evaded_breakdown,
+                reward_breakdowns=self._get_reward_breakdowns(),
             )
 
             progress_csv = os.path.join(self.log_dir, 'progress.csv')
@@ -763,13 +888,21 @@ class PerformanceCallback(BaseCallback):
             "final_nash_metric": float(self.nash_metrics[-1]) if self.nash_metrics else 0.0,
         }
 
-        macro_counts = {
-            key: int(value)
-            for key, value in self._macro_outcome_counts().items()
-        }
-        if macro_counts:
-            stats["macro_outcomes"] = macro_counts
-        
+        summary_counts, evaded_breakdown = aggregate_outcome_counts(
+            {
+                key: int(value)
+                for key, value in self.outcome_counter.items()
+            },
+            include_breakdown=True,
+        )
+        if summary_counts:
+            stats["macro_outcomes"] = {key: int(value) for key, value in summary_counts.items()}
+        if evaded_breakdown:
+            stats["evaded_breakdown"] = {key: int(value) for key, value in evaded_breakdown.items()}
+        breakdowns = self._get_reward_breakdowns()
+        if breakdowns:
+            stats["reward_breakdowns"] = breakdowns[-100:]
+
         # JSON으로 저장
         import json
         stats_path = f"{self.log_dir}/training_stats.json"
@@ -805,6 +938,22 @@ class PerformanceCallback(BaseCallback):
                     continue
             if normalized:
                 self.outcome_counter = normalized
+
+        stored_breakdowns = data.get("reward_breakdowns")
+        if isinstance(stored_breakdowns, list):
+            parsed: List[Dict[str, float]] = []
+            for entry in stored_breakdowns:
+                if isinstance(entry, dict):
+                    normalized_entry: Dict[str, float] = {}
+                    for key, value in entry.items():
+                        try:
+                            normalized_entry[str(key)] = float(value)
+                        except (TypeError, ValueError):
+                            continue
+                    parsed.append(normalized_entry)
+                else:
+                    parsed.append({})
+            self.reward_breakdowns = parsed
 
         recent_successes = data.get("recent_successes")
         if not recent_successes and data.get("episodes_info"):
@@ -1513,16 +1662,16 @@ class DetailedAnalysisCallback(BaseCallback):
                 if vmin == vmax:
                     vmin *= 0.9
                     vmax *= 1.1
-                lower = max(vmin / 1.05, 1e-6)
-                upper = max(lower * 1.001, vmax * 1.05)
+                lower = max(vmin / 1.2, 1e-6)
+                upper = max(lower * 1.001, vmax * 1.2)
                 ax.set_ylim(lower, upper)
             else:
                 if vmin == vmax:
-                    delta = abs(vmin) * 0.1 or 1.0
+                    delta = abs(vmin) * 0.15 or 1.0
                 else:
-                    delta = (vmax - vmin) * 0.05
+                    delta = (vmax - vmin) * 0.1
                     if delta == 0:
-                        delta = max(abs(vmax), abs(vmin), 1.0) * 0.05
+                        delta = max(abs(vmax), abs(vmin), 1.0) * 0.1
                 ax.set_ylim(vmin - delta, vmax + delta)
 
         # 색상 맵 (환경별로 다른 마커)
@@ -1669,27 +1818,8 @@ class DetailedAnalysisCallback(BaseCallback):
         plt.legend()
         plt.grid(True, alpha=0.3, axis='y')
         
-        # 4. 환경별 게임 모드 비율
+        # 4. Delta-V 효율성 (성공률 vs 평균 Delta-V)
         plt.subplot(3, 2, 4)
-        game_mode_ratios = {}
-        
-        for env_id in env_ids:
-            env_episodes = [ep for ep in self.all_episodes_data if ep['env_id'] == env_id]
-            if env_episodes:
-                total_steps = sum(ep.get('total_steps', 0) for ep in env_episodes)
-                game_steps = sum(ep.get('game_mode_steps', 0) for ep in env_episodes)
-                game_mode_ratios[env_id] = game_steps / total_steps if total_steps > 0 else 0
-        
-        plt.bar(env_ids, [game_mode_ratios.get(env_id, 0) for env_id in env_ids], 
-                color='purple', alpha=0.7)
-        plt.xlabel('Environment ID')
-        plt.ylabel('Game Mode Ratio')
-        plt.title('Proportion of Steps in Game Mode')
-        plt.ylim(0, 1)
-        plt.grid(True, alpha=0.3, axis='y')
-        
-        # 5. Delta-V 효율성 (성공률 vs 평균 Delta-V)
-        plt.subplot(3, 2, 5)
         success_rates = []
         avg_dvs = []
         scatter_env_ids = []
@@ -1717,9 +1847,9 @@ class DetailedAnalysisCallback(BaseCallback):
             cbar.set_ticks(color_values)
             cbar.set_ticklabels([str(env_id) for env_id in scatter_env_ids])
             plt.grid(True, alpha=0.3)
-        
-        # 6. 요약 통계
-        plt.subplot(3, 2, 6)
+
+        # 5. 요약 통계
+        plt.subplot(3, 2, 5)
         plt.axis('off')
         
         # 전체 통계 계산
@@ -1742,7 +1872,7 @@ class DetailedAnalysisCallback(BaseCallback):
         """
         plt.text(0.1, 0.5, summary_text, fontsize=11, verticalalignment='center', 
                 fontfamily='monospace', bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
-        
+
         plt.tight_layout()
         plt.savefig(f'{self.save_dir}/env_statistics.png', dpi=150)
         plt.close()

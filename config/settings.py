@@ -65,6 +65,19 @@ class EnvironmentConfig:
     lqr_R_diag: List[float] = field(
         default_factory=lambda: list(ENV_PARAMS["lqr_R_diag"])
     )
+    use_huber_stage: bool = ENV_PARAMS["use_huber_stage"]
+    use_rayleigh_stage_scaling: bool = ENV_PARAMS["use_rayleigh_stage_scaling"]
+    stage_huber_pos_delta: Optional[float] = ENV_PARAMS["stage_huber_pos_delta"]
+    stage_huber_vel_delta: float = ENV_PARAMS["stage_huber_vel_delta"]
+    stage_rayleigh_scale: Optional[float] = ENV_PARAMS["stage_rayleigh_scale"]
+    reward_stage_weight: float = ENV_PARAMS["reward_stage_weight"]
+    reward_terminal_weight: float = ENV_PARAMS["reward_terminal_weight"]
+    reward_event_weight: float = ENV_PARAMS["reward_event_weight"]
+    use_huber_terminal: bool = ENV_PARAMS["use_huber_terminal"]
+    terminal_huber_pos_delta: Optional[float] = ENV_PARAMS["terminal_huber_pos_delta"]
+    terminal_huber_vel_delta: float = ENV_PARAMS["terminal_huber_vel_delta"]
+    use_rayleigh_terminal_scaling: bool = ENV_PARAMS["use_rayleigh_terminal_scaling"]
+    terminal_rayleigh_scale: Optional[float] = ENV_PARAMS["terminal_rayleigh_scale"]
 
     # 버퍼 설정
     capture_buffer_steps: int = BUFFER_PARAMS["capture_buffer_steps"]

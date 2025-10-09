@@ -446,6 +446,9 @@ class SACTrainer:
         )
         self.callbacks.append(evasion_callback)
 
+        # Performance 콜백이 회피 콜백의 보상 분해 데이터를 활용하도록 연결
+        performance_callback.set_reward_breakdown_source(lambda: evasion_callback.reward_breakdowns)
+
         # 3. 최종 에피소드 궤적 기록
         ephemeris_callback = EphemerisLoggerCallback(log_dir=self.log_dir)
         self.callbacks.append(ephemeris_callback)

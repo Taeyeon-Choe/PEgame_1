@@ -8,7 +8,7 @@ matplotlib.use('Agg')  # GUI 없는 환경에서 사용
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D, art3d
 from matplotlib.lines import Line2D
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Any, Union
 import os
 import json
 import csv
@@ -169,10 +169,27 @@ def plot_sac_training_metrics(progress_path: str,
         save_data_to_csv(metric_data, f'{save_dir}/{metric_safe}.csv')
 
 
-def aggregate_outcome_counts(outcome_counts: Dict[str, Any]) -> Dict[str, int]:
-    """세부 결과 카운트를 대분류 지표로 집계한다."""
+def aggregate_outcome_counts(
+    outcome_counts: Dict[str, Any],
+    include_breakdown: bool = False,
+) -> Union[Dict[str, int], Tuple[Dict[str, int], Dict[str, int]]]:
+    """세부 결과 카운트를 대분류 지표로 집계한다.
+
+    Parameters
+    ----------
+    outcome_counts:
+        세부 종료 사유별 카운트 값.
+    include_breakdown:
+        영구 회피와 최대 스텝 종료를 구분한 상세 분해 결과를 함께 반환할지 여부.
+
+    Returns
+    -------
+    Dict[str, int] or Tuple[Dict[str, int], Dict[str, int]]
+        기본적으로 대분류 결과를 반환하며, ``include_breakdown`` 이 ``True`` 인 경우
+        (macro_counts, breakdown_counts) 튜플을 반환한다.
+    """
     if not outcome_counts:
-        return {}
+        return ({}, {}) if include_breakdown else {}
 
     normalized: Dict[str, int] = {}
     for raw_key, raw_value in outcome_counts.items():
@@ -188,39 +205,44 @@ def aggregate_outcome_counts(outcome_counts: Dict[str, Any]) -> Dict[str, int]:
         normalized[key] = normalized.get(key, 0) + max(count, 0)
 
     if not normalized:
-        return {}
+        return ({}, {}) if include_breakdown else {}
 
-    total = sum(normalized.values())
+    captured = 0
+    permanent_evasion = 0
+    max_steps = 0
+    fuel_depleted = 0
+    other = 0
 
-    def _sum_if(*substrings: str) -> int:
-        return sum(
-            value
-            for name, value in normalized.items()
-            if all(substr in name for substr in substrings)
-        )
+    for name, count in normalized.items():
+        if 'fuel' in name and 'deplet' in name:
+            fuel_depleted += count
+        elif 'max_step' in name or 'maxstep' in name:
+            max_steps += count
+        elif 'captur' in name:
+            captured += count
+        elif 'evas' in name or 'evaded' in name:
+            permanent_evasion += count
+        else:
+            other += count
 
-    captured = _sum_if('captur')
-    evaded = _sum_if('evas')
-    max_steps = _sum_if('max_step') + _sum_if('maxstep')
-    fuel_depleted = _sum_if('fuel', 'deplet')
-
-    other = total - (captured + evaded + max_steps + fuel_depleted)
-    other = max(other, 0)
-
-    aggregated: Dict[str, int] = {
+    evaded_total = permanent_evasion + max_steps
+    macro_counts: Dict[str, int] = {
         'Captured': captured,
-        'Evaded': evaded,
-        'Evaded (incl. max steps)': evaded + max_steps,
+        'Evaded': evaded_total,
+        'Fuel Depleted': fuel_depleted,
     }
-
-    if max_steps > 0:
-        aggregated['Max Steps'] = max_steps
-    if fuel_depleted > 0:
-        aggregated['Fuel Depleted'] = fuel_depleted
     if other > 0:
-        aggregated['Other'] = other
+        macro_counts['Other'] = other
 
-    return aggregated
+    if include_breakdown:
+        breakdown = {}
+        if permanent_evasion > 0:
+            breakdown['Permanent Evasion'] = permanent_evasion
+        if max_steps > 0:
+            breakdown['Max Steps'] = max_steps
+        return macro_counts, breakdown
+
+    return macro_counts
 
 
 def plot_training_progress(success_rates: List[float],
@@ -233,7 +255,9 @@ def plot_training_progress(success_rates: List[float],
                           save_dir: str,
                           macro_counts: Optional[Dict[str, int]] = None,
                           episode_rewards: Optional[List[float]] = None,
-                          reward_window: int = 100):
+                          reward_window: int = 100,
+                          evaded_breakdown: Optional[Dict[str, int]] = None,
+                          reward_breakdowns: Optional[List[Dict[str, float]]] = None):
     """학습 진행 상황 시각화"""
     setup_matplotlib()
     
@@ -272,11 +296,81 @@ def plot_training_progress(success_rates: List[float],
         episodes_axis = list(range(1, len(episode_rewards) + 1))
         reward_ma = moving_average(episode_rewards, reward_window)
 
+        component_keys: List[str] = []
+        component_series: List[List[float]] = []
+        use_components = (
+            reward_breakdowns
+            and len(reward_breakdowns) == len(episode_rewards)
+        )
+        if use_components:
+            component_keys = sorted({key for breakdown in reward_breakdowns for key in breakdown.keys()})
+            component_keys = [
+                key for key in component_keys
+                if any(abs(float(breakdown.get(key, 0.0))) > 1e-12 for breakdown in reward_breakdowns)
+            ]
+            use_components = bool(component_keys)
+
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-        plt.plot(episodes_axis, episode_rewards, label='Episode Reward',
-                 color=PLOT_PARAMS['colors']['evader'], alpha=0.35, linewidth=0.8)
-        plt.plot(episodes_axis, reward_ma, label=f'Moving Average ({reward_window})',
-                 color='darkgreen', linewidth=2)
+        reward_data = {
+            'episode': episodes_axis,
+        }
+
+        if use_components:
+            cmap = plt.get_cmap('tab10', len(component_keys))
+            for idx, key in enumerate(component_keys):
+                series = [float(breakdown.get(key, 0.0)) for breakdown in reward_breakdowns]
+                component_series.append(series)
+                plt.plot(
+                    episodes_axis,
+                    series,
+                    label=key,
+                    color=cmap(idx),
+                    linewidth=1.2,
+                )
+                column_name = 'component_' + str(key).replace(' ', '_')
+                reward_data[column_name] = series
+
+            total_from_components = [
+                sum(series[i] for series in component_series)
+                for i in range(len(episodes_axis))
+            ]
+            plt.plot(
+                episodes_axis,
+                total_from_components,
+                label='Total Reward',
+                color='black',
+                linewidth=1.5,
+                linestyle='--',
+                alpha=0.8,
+            )
+            plt.plot(
+                episodes_axis,
+                reward_ma,
+                label=f'Moving Average ({reward_window})',
+                color='darkgreen',
+                linewidth=2,
+            )
+            reward_data['episode_reward'] = total_from_components
+            reward_data['episode_reward_ma'] = reward_ma
+        else:
+            plt.plot(
+                episodes_axis,
+                episode_rewards,
+                label='Episode Reward',
+                color=PLOT_PARAMS['colors']['evader'],
+                alpha=0.35,
+                linewidth=0.8,
+            )
+            plt.plot(
+                episodes_axis,
+                reward_ma,
+                label=f'Moving Average ({reward_window})',
+                color='darkgreen',
+                linewidth=2,
+            )
+            reward_data['episode_reward'] = episode_rewards
+            reward_data['episode_reward_ma'] = reward_ma
+
         plt.xlabel('Episode')
         plt.ylabel('Total Reward')
         plt.title('Episode Reward Trend')
@@ -286,33 +380,42 @@ def plot_training_progress(success_rates: List[float],
         plt.savefig(f'{save_dir}/episode_reward_trend.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
 
-        reward_data = {
-            'episode': episodes_axis,
-            'episode_reward': episode_rewards,
-            'episode_reward_ma': reward_ma,
-        }
         save_data_to_csv(reward_data, f'{save_dir}/episode_rewards.csv')
 
     # 2. 결과 분포 파이 차트
     if outcome_counts:
         if isinstance(outcome_counts, dict):
-            raw_items = [
-                (str(label), int(value))
-                for label, value in outcome_counts.items()
-            ]
+            friendly_labels = {
+                'captured': 'Captured',
+                'permanent_evasion': 'Permanent Evasion',
+                'evaded': 'Evaded',
+                'max_steps_reached': 'Max Steps (Evaded)',
+                'fuel_depleted': 'Fuel Depleted',
+            }
+            raw_items = []
+            for label, value in outcome_counts.items():
+                try:
+                    count = int(value)
+                except (TypeError, ValueError):
+                    continue
+                if count < 0:
+                    continue
+                normalized = str(label).lower()
+                display = friendly_labels.get(normalized, label.replace('_', ' ').title())
+                raw_items.append((display, count))
         else:
             legacy_labels = [
                 'Captured',
                 'Permanent Evasion',
                 'Evaded (legacy)',
                 'Fuel Depleted',
-                'Max Steps',
+                'Max Steps (Evaded)',
             ]
             default_labels = [
                 'Captured',
                 'Evaded',
                 'Fuel Depleted',
-                'Max Steps',
+                'Max Steps (Evaded)',
             ]
             labels_source = legacy_labels if len(outcome_counts) >= 5 else default_labels
             raw_items = list(zip(labels_source[:len(outcome_counts)], outcome_counts))
@@ -343,15 +446,13 @@ def plot_training_progress(success_rates: List[float],
     if macro_counts:
         preferred_order = [
             'Captured',
-            'Evaded (incl. max steps)',
             'Evaded',
-            'Max Steps',
             'Fuel Depleted',
-            'Other'
+            'Other',
         ]
-        ordered_labels = [label for label in preferred_order if label in macro_counts]
-        for label in macro_counts:
-            if label not in ordered_labels:
+        ordered_labels = [label for label in preferred_order if label in macro_counts and macro_counts[label] > 0]
+        for label, value in macro_counts.items():
+            if value > 0 and label not in ordered_labels:
                 ordered_labels.append(label)
 
         if ordered_labels:
@@ -373,6 +474,28 @@ def plot_training_progress(success_rates: List[float],
 
             with open(f'{save_dir}/macro_outcome_distribution.json', 'w') as f:
                 json.dump(_json_ready(macro_counts), f, indent=2)
+
+    if evaded_breakdown:
+        total_evaded = sum(evaded_breakdown.values())
+        if total_evaded > 0:
+            labels = list(evaded_breakdown.keys())
+            values = [evaded_breakdown[label] for label in labels]
+            plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+            colors = plt.cm.Greens(np.linspace(0.4, 0.9, len(labels)))
+            wedges, texts, autotexts = plt.pie(
+                values,
+                labels=labels,
+                autopct='%1.1f%%',
+                colors=colors,
+                startangle=90,
+            )
+            plt.title(f'Evaded Breakdown (Episode {episode_count})')
+            plt.tight_layout()
+            plt.savefig(f'{save_dir}/evaded_breakdown.png', dpi=PLOT_PARAMS['dpi'])
+            plt.close()
+
+            with open(f'{save_dir}/evaded_breakdown.json', 'w') as f:
+                json.dump(_json_ready(evaded_breakdown), f, indent=2)
 
     # 3. Zero-Sum 게임 보상 그래프
     if len(evader_rewards) > 100:
@@ -484,6 +607,9 @@ def plot_training_progress(success_rates: List[float],
         'episode_rewards': episode_rewards_limited,
         'episode_reward_ma': reward_ma_limited,
     }
+
+    if reward_breakdowns:
+        all_training_data['reward_breakdowns'] = reward_breakdowns[-1000:]
 
     with open(f'{save_dir}/training_progress.json', 'w') as f:
         json.dump(_json_ready(all_training_data), f, indent=2)
@@ -771,7 +897,8 @@ def plot_test_results(results: List[Dict],
                      zero_sum_metrics: Dict,
                      outcome_types: Dict,
                      save_dir: Optional[str] = None,
-                     macro_counts: Optional[Dict[str, int]] = None):
+                     macro_counts: Optional[Dict[str, int]] = None,
+                     evaded_breakdown: Optional[Dict[str, int]] = None):
     """테스트 결과 시각화"""
     setup_matplotlib()
     
@@ -823,15 +950,13 @@ def plot_test_results(results: List[Dict],
     if macro_counts:
         preferred_order = [
             'Captured',
-            'Evaded (incl. max steps)',
             'Evaded',
-            'Max Steps',
             'Fuel Depleted',
-            'Other'
+            'Other',
         ]
-        ordered_labels = [label for label in preferred_order if label in macro_counts]
-        for label in macro_counts:
-            if label not in ordered_labels:
+        ordered_labels = [label for label in preferred_order if label in macro_counts and macro_counts[label] > 0]
+        for label, value in macro_counts.items():
+            if value > 0 and label not in ordered_labels:
                 ordered_labels.append(label)
 
         if ordered_labels:
@@ -853,6 +978,28 @@ def plot_test_results(results: List[Dict],
                 with open(f"{save_dir}/macro_outcome_distribution.json", 'w') as f:
                     json.dump(_json_ready(macro_counts), f, indent=2)
             plt.close()
+
+    if evaded_breakdown:
+        total_evaded = sum(evaded_breakdown.values())
+        if total_evaded > 0:
+            labels = list(evaded_breakdown.keys())
+            values = [evaded_breakdown[label] for label in labels]
+            plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
+            colors = plt.cm.Greens(np.linspace(0.4, 0.9, len(labels)))
+            plt.pie(
+                values,
+                labels=labels,
+                autopct='%1.1f%%',
+                colors=colors,
+                startangle=90,
+            )
+            plt.title('Evaded Breakdown (Test)')
+            plt.tight_layout()
+            if save_dir:
+                plt.savefig(f"{save_dir}/evaded_breakdown.png", dpi=PLOT_PARAMS['dpi'])
+                with open(f"{save_dir}/evaded_breakdown.json", 'w') as f:
+                    json.dump(_json_ready(evaded_breakdown), f, indent=2)
+            plt.close()
     
     # 3. Zero-Sum 게임 메트릭 그래프들
     if zero_sum_metrics:
@@ -864,10 +1011,17 @@ def plot_outcome_distribution(outcome_types: Dict, save_dir: Optional[str] = Non
     # 비어있는 항목 필터링
     filtered_counts = []
     filtered_labels = []
+    friendly_labels = {
+        'max_steps_reached': 'Max Steps (Evaded)',
+        'permanent_evasion': 'Permanent Evasion',
+        'fuel_depleted': 'Fuel Depleted',
+    }
+
     for label, count in outcome_types.items():
         if count > 0:
             filtered_counts.append(count)
-            filtered_labels.append(label.replace('_', ' ').title())
+            key = str(label).lower()
+            filtered_labels.append(friendly_labels.get(key, label.replace('_', ' ').title()))
     
     if filtered_counts:
         plt.figure(figsize=(10, 10))
