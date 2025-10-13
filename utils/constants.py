@@ -31,8 +31,10 @@ ORBIT_BOUNDS = {
 
 # 환경 파라미터
 ENV_PARAMS = {
-    "dt": 30.0,  # 시간 간격 (s)
-    "k": 1,  # 추격자 행동 주기
+    "dt": 20.0,  # 시간 간격 (s)
+    "k": 2,  # 기동 주기 (몇 스텝마다 델타-V 적용)
+    "pursuer_phase": 1,  # 추격자 기동 시작 위상
+    "evader_phase": 0,  # 회피자 기동 시작 위상
     "delta_v_emax": 0.15,  # 회피자 최대 delta-v (m/s)
     "delta_v_pmax": 0.25,  # 추격자 최대 delta-v (m/s)
     "sigma_noise": 0.05,  # 추격자 노이즈 (m/s)
@@ -41,7 +43,7 @@ ENV_PARAMS = {
     "capture_distance": 1000.0,  # 포착 거리 (m)
     "evasion_distance": 10e3,  # 회피 거리 (m)
     "c": 0.01,  # 제어 비용 계수
-    "max_steps": 600,  # 최대 스텝 수
+    "max_steps": 1200,  # 최대 스텝 수 (dt*max_steps = 18000s = 300min)
     "max_delta_v_budget": 250.0,  # 최대 추진제 예산 (m/s)
     "max_initial_separation": 3e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
@@ -55,15 +57,15 @@ ENV_PARAMS = {
     "lqr_horizon": 10,
     "lqr_Q_diag": [0.0001, 0.0001, 0.0001, 0.05, 0.05, 0.05],
     "lqr_QN_diag": [0.0005, 0.0005, 0.0005, 0.01, 0.01, 0.01],
-    "lqr_R_diag": [0.1, 0.1, 0.1],
+    "lqr_R_diag": [1, 1, 1],
     "use_huber_stage": False,
     "use_rayleigh_stage_scaling": True,
     "stage_huber_pos_delta": None,
     "stage_huber_vel_delta": 1.0,
     "stage_rayleigh_scale": None,  # Optional sigma for Rayleigh CDF applied to x'Qx (auto-derived if None)
-    "reward_stage_weight": 0.3,
-    "reward_terminal_weight": 0.3,
-    "reward_event_weight": 0.4,
+    "reward_stage_weight": 0.05,
+    "reward_terminal_weight": 0.2,
+    "reward_event_weight": 0.75,
     "use_huber_terminal": False,
     "terminal_huber_pos_delta": None,
     "terminal_huber_vel_delta": 1.0,
@@ -82,11 +84,11 @@ BUFFER_PARAMS = {
 TRAINING_PARAMS = {
     "total_timesteps": 100000,
     "nash_total_timesteps": 50000,
-    "learning_rate": 0.0005,
-    "buffer_size": 500000,
-    "batch_size": 1024,
-    "tau": 0.01,
-    "gamma": 0.98,
+    "learning_rate": 0.0003,
+    "buffer_size": 1000000,
+    "batch_size": 512,
+    "tau": 0.005,
+    "gamma": 0.995,
     "net_arch": [256, 256, 256],
     "save_freq": 10000,
     "n_envs": min(multiprocessing.cpu_count(), 20),

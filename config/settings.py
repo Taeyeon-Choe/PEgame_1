@@ -34,6 +34,8 @@ class EnvironmentConfig:
 
     dt: float = ENV_PARAMS["dt"]
     k: int = ENV_PARAMS["k"]
+    pursuer_phase: int = ENV_PARAMS["pursuer_phase"]
+    evader_phase: int = ENV_PARAMS["evader_phase"]
     delta_v_emax: float = ENV_PARAMS["delta_v_emax"]
     delta_v_pmax: float = ENV_PARAMS["delta_v_pmax"]
     sigma_noise: float = ENV_PARAMS["sigma_noise"]
@@ -91,6 +93,7 @@ class TrainingConfig:
 
     total_timesteps: int = TRAINING_PARAMS["total_timesteps"]
     nash_total_timesteps: int = TRAINING_PARAMS["nash_total_timesteps"]
+    algorithm: str = "SAC"
     learning_rate: float = TRAINING_PARAMS["learning_rate"]
     buffer_size: int = TRAINING_PARAMS["buffer_size"]
     batch_size: int = TRAINING_PARAMS["batch_size"]

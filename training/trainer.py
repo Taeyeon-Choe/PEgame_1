@@ -11,7 +11,8 @@ from pathlib import Path
 
 import torch
 import numpy as np
-from stable_baselines3 import SAC
+from stable_baselines3 import SAC, TD3, DDPG
+from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.vec_env import DummyVecEnv
 from environment.pursuit_evasion_env import PursuitEvasionEnv
@@ -38,7 +39,13 @@ patch_sb3_system_info()
 
 
 class SACTrainer:
-    """SAC 알고리즘 트레이너"""
+    """Stable-Baselines3 기반 강화학습 트레이너"""
+
+    SUPPORTED_ALGORITHMS = {
+        "SAC": SAC,
+        "TD3": TD3,
+        "DDPG": DDPG,
+    }
 
     def __init__(self, env, config: Optional[ProjectConfig] = None, experiment_name=None,
                  log_dir=None, resume: bool = False):
@@ -62,6 +69,7 @@ class SACTrainer:
         self.training_config = config.training
         self.paths_config = config.paths
         self.resume_mode = resume
+        self._set_algorithm(getattr(self.training_config, "algorithm", "SAC"))
 
         # 모델 및 로깅 설정
         self.model = None
@@ -85,6 +93,21 @@ class SACTrainer:
 
         # 이어 학습을 위한 기존 데이터 로드
         self.resume_state = self._load_resume_state() if self.resume_mode else {}
+
+    def _set_algorithm(self, algorithm: Optional[str]) -> None:
+        """지원 알고리즘 선택 및 검증"""
+        algo_name = (algorithm or "SAC").upper()
+        if algo_name not in self.SUPPORTED_ALGORITHMS:
+            supported = ", ".join(self.SUPPORTED_ALGORITHMS.keys())
+            raise ValueError(f"지원하지 않는 알고리즘입니다: {algo_name} (가능한 값: {supported})")
+
+        self.algorithm_name = algo_name
+        self.algorithm_cls = self.SUPPORTED_ALGORITHMS[algo_name]
+        self.model_name_prefix = algo_name.lower()
+
+        # 설정에 알고리즘 명시 (대문자 형태 저장)
+        if hasattr(self.training_config, "algorithm"):
+            self.training_config.algorithm = algo_name
 
     def _setup_log_directory(self) -> str:
         """로그 디렉토리 설정 및 생성"""
@@ -151,6 +174,13 @@ class SACTrainer:
                 state.setdefault("evader_rewards", evader_rewards)
             if pursuer_rewards:
                 state.setdefault("pursuer_rewards", pursuer_rewards)
+
+        # 에피소드별 총 보상 (전체 기록) 복원
+        if not state.get("episode_rewards"):
+            episode_rewards = self._load_csv_series(plots_dir / "episode_rewards.csv", "episode_reward")
+            if episode_rewards:
+                state["episode_rewards"] = episode_rewards
+                state.setdefault("episode_count", len(episode_rewards))
 
         # Nash 메트릭
         if not state.get("nash_metrics"):
@@ -362,35 +392,48 @@ class SACTrainer:
         return DummyVecEnv([_init_env])
 
     def setup_model(self, model_params: Optional[Dict[str, Any]] = None, policy_kwargs=None):
-        """SAC 모델 설정"""
+        """강화학습 모델 설정"""
         if model_params is None:
             model_params = {}
+
+        # 외부에서 알고리즘을 지정하면 우선 적용
+        algo_override = model_params.pop("algorithm", None)
+        if algo_override:
+            self._set_algorithm(algo_override)
+        else:
+            # 설정 객체에 문자열만 남아있을 수 있으므로 재확인
+            self._set_algorithm(getattr(self.training_config, "algorithm", self.algorithm_name))
         
         if policy_kwargs is None:
-            policy_kwargs = {
-                "net_arch": self.training_config.net_arch,
-                "activation_fn": torch.nn.ReLU,
-                "use_sde": False,
-                "log_std_init": -3,
-                "normalize_images": False,
-            }
+            net_arch = list(self.training_config.net_arch)
+            if self.algorithm_name == "SAC":
+                policy_kwargs = {
+                    "net_arch": net_arch,
+                    "activation_fn": torch.nn.ReLU,
+                    "use_sde": False,
+                    "log_std_init": -3,
+                    "normalize_images": False,
+                }
+            else:
+                policy_kwargs = {
+                    "net_arch": {
+                        "pi": net_arch,
+                        "qf": net_arch,
+                    },
+                    "activation_fn": torch.nn.ReLU,
+                }
 
         # 기본 파라미터 설정
         default_params = {
             "learning_rate": self.training_config.learning_rate,
             "buffer_size": self.training_config.buffer_size,
-            "learning_starts": 1000,
+            "learning_starts": 10000,
             "batch_size": self.training_config.batch_size,
             "tau": self.training_config.tau,
             "gamma": self.training_config.gamma,
             "train_freq": 1,
-            "gradient_steps": 1,
+            "gradient_steps": 2,
             "action_noise": None,
-            "ent_coef": "auto",
-            "target_update_interval": 1,
-            "target_entropy": "auto",
-            "use_sde": True,
-            "use_sde_at_warmup": False,
             "tensorboard_log": f"{self.log_dir}/tensorboard",
             "policy_kwargs": policy_kwargs,
             "verbose": self.training_config.verbose,
@@ -398,10 +441,12 @@ class SACTrainer:
             "device": self.training_config.device,
         }
 
+        default_params.update(self._get_algorithm_default_params())
+
         # 사용자 파라미터로 덮어쓰기
         default_params.update(model_params)
 
-        print(f"\nSAC 모델 초기화")
+        print(f"\n{self.algorithm_name} 모델 초기화")
         print(f"  - Device: {self.training_config.device}")
         print(f"  - 정책 네트워크: {policy_kwargs['net_arch']}")
         print(f"  - 학습률: {self.training_config.learning_rate}")
@@ -409,13 +454,34 @@ class SACTrainer:
         print(f"  - 버퍼 크기: {self.training_config.buffer_size}")
         print(f"  - Verbose 레벨: {self.training_config.verbose}")
         
-        self.model = SAC("MlpPolicy", self.env, **default_params)
+        self.model = self.algorithm_cls("MlpPolicy", self.env, **default_params)
 
         # 로거 설정
         self.logger = configure(self.log_dir, ["stdout", "csv", "tensorboard"])
         self.model.set_logger(self.logger)
 
         return self.model
+
+    def _get_algorithm_default_params(self) -> Dict[str, Any]:
+        """알고리즘별 기본 하이퍼파라미터"""
+        if self.algorithm_name == "SAC":
+            return {
+                "ent_coef": "auto_0.5",
+                "target_update_interval": 2,
+                "target_entropy": "auto",
+                "use_sde": False,
+                "use_sde_at_warmup": False,
+            }
+        if self.algorithm_name == "TD3":
+            return {
+                "policy_delay": 2,
+                "target_policy_noise": 0.2,
+                "target_noise_clip": 0.5,
+            }
+        # DDPG 기본값
+        return {
+            "target_update_interval": 1,
+        }
 
     def setup_callbacks(self, custom_callbacks: Optional[List] = None):
         """콜백 설정"""
@@ -484,7 +550,7 @@ class SACTrainer:
         checkpoint_callback = ModelSaveCallback(
             save_freq=max(1, getattr(self.training_config, "save_freq", 10000)),
             save_path=f"{self.log_dir}/models",
-            name_prefix="sac_final",
+            name_prefix=f"{self.model_name_prefix}_final",
             verbose=1,
             save_replay_buffer=True,
             overwrite_latest=True,
@@ -507,7 +573,7 @@ class SACTrainer:
         return CallbackList(self.callbacks)
 
     def train(self, total_timesteps: Optional[int] = None, callback=None, 
-              reset_num_timesteps: bool = True, tb_log_name: str = "sac_run"):
+              reset_num_timesteps: bool = True, tb_log_name: Optional[str] = None):
         """
         모델 학습 실행
 
@@ -531,7 +597,7 @@ class SACTrainer:
             callback = self.setup_callbacks()
 
         print(f"\n{'='*50}")
-        print(f"SAC 모델 학습 시작")
+        print(f"{self.algorithm_name} 모델 학습 시작")
         print(f"{'='*50}")
         print(f"총 타임스텝: {total_timesteps:,}")
         print(f"저장 주기: {self.training_config.save_freq:,}")
@@ -543,7 +609,7 @@ class SACTrainer:
             total_timesteps=total_timesteps,
             callback=callback,
             log_interval=self.training_config.log_interval,
-            tb_log_name=tb_log_name,
+            tb_log_name=tb_log_name or f"{self.model_name_prefix}_run",
             reset_num_timesteps=reset_num_timesteps,
             progress_bar=True  # 진행 표시줄 활성화
         )
@@ -560,7 +626,7 @@ class SACTrainer:
         print(f"{'='*50}")
 
         # 최종 모델 저장
-        final_model_path = f"{self.log_dir}/models/sac_final.zip"
+        final_model_path = f"{self.log_dir}/models/{self.model_name_prefix}_final.zip"
         self.save_model(final_model_path)
         
         # 학습 통계 저장
@@ -596,7 +662,7 @@ class SACTrainer:
     def load_model(self, load_path: str, load_replay_buffer: bool = True):
         """모델 로드"""
         try:
-            self.model = SAC.load(load_path, env=self.env, device=self.training_config.device)
+            self.model = self.algorithm_cls.load(load_path, env=self.env, device=self.training_config.device)
             print(f"모델 로드됨: {load_path}")
 
             # 새 로그 디렉토리에 맞춰 로거와 텐서보드 경로 재설정
@@ -609,14 +675,53 @@ class SACTrainer:
             if load_replay_buffer:
                 buffer_path = load_path.replace(".zip", "_replay_buffer.pkl")
                 if os.path.exists(buffer_path):
-                    self.model.load_replay_buffer(buffer_path)
-                    print(f"리플레이 버퍼 로드됨: {buffer_path}")
+                    try:
+                        self.model.load_replay_buffer(buffer_path)
+                        print(f"리플레이 버퍼 로드됨: {buffer_path}")
+                    except Exception as exc:
+                        print(f"리플레이 버퍼 로드 실패: {buffer_path} ({exc})")
+                    else:
+                        self._ensure_replay_buffer_env_compatibility()
+                else:
+                    self._ensure_replay_buffer_env_compatibility()
+            else:
+                self._ensure_replay_buffer_env_compatibility()
 
             return self.model
 
         except Exception as e:
             print(f"모델 로드 실패: {e}")
             return None
+
+    def _ensure_replay_buffer_env_compatibility(self) -> None:
+        """리플레이 버퍼의 환경 수와 현재 VecEnv의 환경 수를 일치시킴"""
+        if self.model is None or not hasattr(self.model, "replay_buffer"):
+            return
+
+        replay_buffer = getattr(self.model, "replay_buffer", None)
+        if replay_buffer is None:
+            return
+
+        buffer_envs = getattr(replay_buffer, "n_envs", None)
+        current_envs = getattr(self.env, "num_envs", 1)
+        if buffer_envs is None or buffer_envs == current_envs:
+            return
+
+        print(
+            f"경고: 리플레이 버퍼 환경 수({buffer_envs})와 현재 환경 수({current_envs})가 일치하지 않습니다. "
+            "새 리플레이 버퍼로 초기화합니다."
+        )
+
+        rb_cls = replay_buffer.__class__ if replay_buffer is not None else ReplayBuffer
+        self.model.replay_buffer = rb_cls(
+            buffer_size=self.model.buffer_size,
+            observation_space=self.model.observation_space,
+            action_space=self.model.action_space,
+            device=self.model.device,
+            n_envs=current_envs,
+            optimize_memory_usage=getattr(self.model, "optimize_memory_usage", False),
+            handle_timeout_termination=getattr(self.model, "handle_timeout_termination", True),
+        )
 
     def evaluate(self, n_episodes: int = 10, deterministic: bool = True) -> Dict[str, float]:
         """모델 평가"""
@@ -684,6 +789,7 @@ class SACTrainer:
         stats = {
             "log_dir": self.log_dir,
             "experiment_name": self.experiment_name,
+             "algorithm": self.algorithm_name,
             "total_timesteps": self.model.num_timesteps if self.model else 0,
             "training_config": self.training_config.__dict__,
         }
@@ -734,7 +840,7 @@ class SACTrainer:
         except Exception as e:
             print(f"학습 히스토리 저장 중 오류: {e}")
 
-    def continue_training(self, additional_timesteps: int, tb_log_name: str = "sac_continue") -> "SACTrainer":
+    def continue_training(self, additional_timesteps: int, tb_log_name: Optional[str] = None) -> "SACTrainer":
         """학습 계속하기"""
         if self.model is None:
             print("계속할 모델이 없습니다.")
@@ -769,7 +875,7 @@ class SACTrainer:
         self.train(
             total_timesteps=fine_tune_timesteps,
             reset_num_timesteps=False,
-            tb_log_name="sac_fine_tune",
+            tb_log_name=f"{self.model_name_prefix}_fine_tune",
         )
 
         # 설정 복원
@@ -797,11 +903,15 @@ def create_trainer(
     experiment_name: Optional[str] = None,
     log_dir: Optional[str] = None,
     resume: bool = False,
+    algorithm: Optional[str] = None,
 ) -> SACTrainer:
     """트레이너 생성 헬퍼 함수"""
     if config is None:
         from config.settings import get_config
         config = get_config(experiment_name=experiment_name)
+
+    if algorithm:
+        config.training.algorithm = algorithm.upper()
 
     trainer = SACTrainer(env, config, experiment_name=experiment_name, log_dir=log_dir, resume=resume)
     return trainer

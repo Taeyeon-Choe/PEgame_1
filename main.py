@@ -23,7 +23,6 @@ from environment.pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
 from training.trainer import SACTrainer, create_trainer
 from training.nash_equilibrium import NashEquilibriumTrainer, train_nash_equilibrium_model
 from analysis.evaluator import ModelEvaluator, create_evaluator
-from stable_baselines3 import SAC
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 import torch
 
@@ -95,14 +94,31 @@ def _infer_existing_log_dir(model_path: str) -> Optional[str]:
     return None
 
 
+def _normalize_algorithm_name(algo: Optional[str]) -> str:
+    """알고리즘 이름을 대문자 표기 형태로 정규화"""
+    return (algo or "SAC").upper()
+
+
+def _default_model_filename(algo: Optional[str]) -> str:
+    """알고리즘별 기본 모델 파일명"""
+    return f"{_normalize_algorithm_name(algo).lower()}_final.zip"
+
+
+def _resolve_algorithm_class(algo: Optional[str]):
+    """알고리즘 문자열에 대응하는 SB3 클래스 반환"""
+    algo_key = _normalize_algorithm_name(algo)
+    return SACTrainer.SUPPORTED_ALGORITHMS.get(algo_key, SACTrainer.SUPPORTED_ALGORITHMS["SAC"])
+
+
 def train_standard_model(
     config: ProjectConfig,
     save_path: Optional[str] = None,
     load_model_path: Optional[str] = None,
     load_replay_buffer: bool = True,
 ) -> Optional[SACTrainer]:
-    """표준 SAC 모델 학습 (옵션: 기존 모델 이어서 학습)"""
-    print("\n=== 표준 SAC 모델 학습 시작 ===")
+    """표준 학습 (옵션: 기존 모델 이어서 학습)"""
+    algo_name = _normalize_algorithm_name(getattr(config.training, "algorithm", "SAC"))
+    print(f"\n=== {algo_name} 모델 학습 시작 ===")
     
     # 병렬 환경 생성
     env = create_parallel_env(config)
@@ -145,8 +161,8 @@ def train_standard_model(
     )
     
     # train() 내부에서 최종 모델이 저장되므로 별도 저장 생략
-    final_model_path = f"{trainer.log_dir}/models/sac_final.zip"
-    print(f"표준 SAC 학습 완료. 모델 저장: {final_model_path}")
+    final_model_path = f"{trainer.log_dir}/models/{trainer.model_name_prefix}_final.zip"
+    print(f"{algo_name} 학습 완료. 모델 저장: {final_model_path}")
     
     # 환경 정리
     if hasattr(env, 'close'):
@@ -209,8 +225,13 @@ def evaluate_model(model_path: str, config: ProjectConfig, n_tests: int = 10):
            if config.environment.use_gastm else PursuitEvasionEnv(config))
     
     # 모델 로드
+    algo_name = getattr(config.training, "algorithm", "SAC")
+    algo_cls = _resolve_algorithm_class(algo_name)
+    print(f"사용 알고리즘: {algo_name.upper()}")
+    print(f"사용 알고리즘: {algo_name.upper()}")
+
     try:
-        model = SAC.load(model_path, env=env)
+        model = algo_cls.load(model_path, env=env, device=config.training.device)
         print(f"모델 로드 성공: {model_path}")
     except Exception as e:
         print(f"모델 로드 실패: {e}")
@@ -329,8 +350,11 @@ def run_demonstration(model_path: str, config: ProjectConfig):
     env = (PursuitEvasionEnvGASTM(config)
            if config.environment.use_gastm else PursuitEvasionEnv(config))
     
+    algo_name = getattr(config.training, "algorithm", "SAC")
+    algo_cls = _resolve_algorithm_class(algo_name)
+
     try:
-        model = SAC.load(model_path, env=env)
+        model = algo_cls.load(model_path, env=env, device=config.training.device)
         print(f"모델 로드 성공: {model_path}")
     except Exception as e:
         print(f"모델 로드 실패: {e}")
@@ -373,6 +397,12 @@ def interactive_mode():
             use_gastm = input("GA-STM 사용? (y/n, 기본값: y): ").strip().lower()
             use_gastm = use_gastm != 'n'
 
+            # 알고리즘 선택
+            algo_input = input("사용할 알고리즘 (sac/td3/ddpg, 기본값: sac): ").strip().lower()
+            if algo_input not in ('sac', 'td3', 'ddpg'):
+                algo_input = 'sac'
+            algorithm_name = _normalize_algorithm_name(algo_input)
+
             # 기존 모델 이어서 학습 여부
             resume_choice = input("기존 모델에서 이어서 학습하시겠습니까? (y/n, 기본값: n): ").strip().lower()
             resume_training = resume_choice == 'y'
@@ -381,7 +411,7 @@ def interactive_mode():
             resume_log_dir = None
 
             if resume_training:
-                default_model_path = "models/sac_final.zip"
+                default_model_path = f"models/{_default_model_filename(algorithm_name)}"
                 load_model_input = input(
                     f"불러올 모델 경로 (기본값: {default_model_path}): "
                 ).strip()
@@ -405,6 +435,7 @@ def interactive_mode():
             config = get_config(experiment_name="interactive_training")
             config.environment.pursuer_policy = "tvlqr"
             config.training.total_timesteps = timesteps
+            config.training.algorithm = algorithm_name
             config.environment.use_gastm = use_gastm
 
             # 추격자 정책 선택
@@ -496,6 +527,7 @@ def interactive_mode():
 
             print(f"\n학습 설정:")
             print(f"  - 타임스텝: {config.training.total_timesteps:,}")
+            print(f"  - 알고리즘: {config.training.algorithm}")
             print(f"  - GA-STM 사용: {config.environment.use_gastm}")
             print(f"  - dt: {config.environment.dt} s")
             print(f"  - k: {config.environment.k}")
@@ -528,8 +560,14 @@ def interactive_mode():
                 print("학습이 취소되었습니다.")
             
         elif choice == '2' or choice == 'evaluate':
-            model_path = input("모델 경로 (기본값: models/sac_final.zip): ").strip()
-            model_path = model_path if model_path else "models/sac_final.zip"
+            algo_input = input("사용할 알고리즘 (sac/td3/ddpg, 기본값: sac): ").strip().lower()
+            if algo_input not in ('sac', 'td3', 'ddpg'):
+                algo_input = 'sac'
+            algorithm_name = _normalize_algorithm_name(algo_input)
+
+            default_model_path = f"models/{_default_model_filename(algorithm_name)}"
+            model_path = input(f"모델 경로 (기본값: {default_model_path}): ").strip()
+            model_path = model_path if model_path else default_model_path
             
             if not os.path.exists(model_path):
                 print(f"모델 파일을 찾을 수 없습니다: {model_path}")
@@ -543,6 +581,7 @@ def interactive_mode():
 
             config = get_config(experiment_name="interactive_evaluation")
             config.environment.pursuer_policy = "tvlqr"
+            config.training.algorithm = algorithm_name
             config.environment.use_gastm = use_gastm != 'n'
 
             policy_default = config.environment.pursuer_policy
@@ -619,6 +658,7 @@ def interactive_mode():
                         print("R 대각 입력을 해석할 수 없어 기본값을 유지합니다.")
 
             print("\n평가 설정:")
+            print(f"  알고리즘: {config.training.algorithm}")
             print(f"  GA-STM 사용: {config.environment.use_gastm}")
             print(f"  dt: {config.environment.dt} s")
             print(f"  k: {config.environment.k}")
@@ -635,14 +675,21 @@ def interactive_mode():
             evaluate_model(model_path, config, n_tests)
             
         elif choice == '3' or choice == 'demo':
-            model_path = input("모델 경로 (기본값: models/sac_final.zip): ").strip()
-            model_path = model_path if model_path else "models/sac_final.zip"
+            algo_input = input("사용할 알고리즘 (sac/td3/ddpg, 기본값: sac): ").strip().lower()
+            if algo_input not in ('sac', 'td3', 'ddpg'):
+                algo_input = 'sac'
+            algorithm_name = _normalize_algorithm_name(algo_input)
+
+            default_model_path = f"models/{_default_model_filename(algorithm_name)}"
+            model_path = input(f"모델 경로 (기본값: {default_model_path}): ").strip()
+            model_path = model_path if model_path else default_model_path
             
             if not os.path.exists(model_path):
                 print(f"모델 파일을 찾을 수 없습니다: {model_path}")
                 continue
             
             config = get_config(experiment_name="interactive_demo")
+            config.training.algorithm = algorithm_name
             run_demonstration(model_path, config)
             
         elif choice == '4' or choice == 'exit':
@@ -666,7 +713,7 @@ def main():
   python main.py --mode train_standard --timesteps 100000 --experiment-name my_experiment
   
   # 모델 평가
-  python main.py --mode evaluate --model-path models/sac_final.zip
+  python main.py --mode evaluate --algorithm td3 --model-path models/td3_final.zip
   
   # GPU 사용 강제
   python main.py --mode train_standard --gpu
@@ -686,6 +733,9 @@ def main():
                        help='학습 스텝 수')
     parser.add_argument('--experiment-name', type=str, default=None,
                        help='실험 이름')
+    parser.add_argument('--algorithm', type=str, default=None,
+                       choices=['sac', 'td3', 'ddpg'],
+                       help='사용할 SB3 알고리즘 선택 (기본값: sac)')
     
     # 평가 관련 인자  
     parser.add_argument('--model-path', type=str, default=None,
@@ -842,11 +892,15 @@ def main():
             debug_mode=args.debug,
             custom_config=custom_config
         )
+
+    if args.algorithm:
+        config.training.algorithm = args.algorithm.upper()
     
     # 설정 출력
     print("\n=== 설정 정보 ===")
     print(f"실행 모드: {args.mode}")
     print(f"실험 이름: {config.experiment_name}")
+    print(f"알고리즘: {getattr(config.training, 'algorithm', 'SAC')}")
     print(f"GPU 사용: {config.training.use_gpu}")
     print(f"디버그 모드: {config.debug_mode}")
     print(f"GA-STM 사용: {config.environment.use_gastm}")
@@ -873,7 +927,8 @@ def main():
             
             # 학습 후 간단한 평가
             if input("\n학습된 모델을 평가하시겠습니까? (y/n): ").lower() == 'y':
-                evaluate_model(f"{trainer.log_dir}/models/sac_final.zip", config, 5)
+                model_path = f"{trainer.log_dir}/models/{trainer.model_name_prefix}_final.zip"
+                evaluate_model(model_path, config, 5)
             
         elif args.mode == 'train_nash':
             trainer = train_nash_model(config)

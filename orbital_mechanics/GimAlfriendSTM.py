@@ -123,25 +123,34 @@ class GimAlfriendSTM:
     
     def makeDiscreteMatrices(self):
         t = self.time
-        N = len(t)
+        if t is None or len(t) < 2:
+            raise ValueError("Time vector must contain at least two samples to build discrete matrices")
+
+        N = len(t) - 1  # number of propagation intervals
         self.Ak = np.zeros((6, 6, N))
         self.Bk = np.zeros((self.B.shape[0], self.B.shape[1], N))
-        
+
         for k in range(N):
-            Tk = np.linspace(k * self.dt, (k + 1) * self.dt, self.samples)
-            PhiJ2k = PHI_GA_STM(Tk, self.J2, self.ChiefOsc, self.ChiefElemsNSMean, 
+            t_start = t[k]
+            t_end = t[k + 1]
+            Tk = np.linspace(t_start, t_end, self.samples)
+            if Tk.shape[0] < 2:
+                raise ValueError("Discrete matrix integration requires at least two sample points")
+
+            PhiJ2k = PHI_GA_STM(Tk, self.J2, self.ChiefOsc, self.ChiefElemsNSMean,
                                self.Req, self.mu, self.tol)
             phiend = PhiJ2k[:, :, -1]
             self.Ak[:, :, k] = phiend
-            
+
             PhiBk = np.zeros((6, self.B.shape[1], len(Tk)))
             for ii in range(len(Tk)):
                 PhiBk[:, :, ii] = phiend @ np.linalg.inv(PhiJ2k[:, :, ii]) @ self.B
-            
+
             Bd = np.zeros_like(self.B)
             for ii in range(len(Tk) - 1):
-                Bd = Bd + 0.5 * (Tk[ii + 1] - Tk[ii]) * (PhiBk[:, :, ii + 1] + PhiBk[:, :, ii])
-            
+                dt_segment = Tk[ii + 1] - Tk[ii]
+                Bd = Bd + 0.5 * dt_segment * (PhiBk[:, :, ii + 1] + PhiBk[:, :, ii])
+
             self.Bk[:, :, k] = Bd
     
     def plotOrbit(self):

@@ -106,8 +106,10 @@ class PursuitEvasionEnv(gym.Env):
 
     def _init_parameters(self):
         """환경 파라미터 초기화"""
-        self.dt = self.config.dt
-        self.k = self.config.k
+        self.dt = float(self.config.dt)
+        self.k = max(1, int(getattr(self.config, "k", 1)))
+        self.pursuer_phase = int(getattr(self.config, "pursuer_phase", ENV_PARAMS["pursuer_phase"]))
+        self.evader_phase = int(getattr(self.config, "evader_phase", ENV_PARAMS["evader_phase"]))
         self.delta_v_emax = self.config.delta_v_emax
         self.delta_v_pmax = self.config.delta_v_pmax
         self.sigma_noise = self.config.sigma_noise
@@ -266,6 +268,8 @@ class PursuitEvasionEnv(gym.Env):
         self._prev_state = None
         self._last_evader_dv = np.zeros(3, dtype=np.float64)
         self._last_pursuer_dv = np.zeros(3, dtype=np.float64)
+        self._evader_action_step_flag = False
+        self._pursuer_action_step_flag = False
 
     def _init_pursuer_strategy(self):
         """지능형 추격자 전략 초기화"""
@@ -367,6 +371,8 @@ class PursuitEvasionEnv(gym.Env):
         self._prev_state = None
         self._last_evader_dv.fill(0.0)
         self._last_pursuer_dv.fill(0.0)
+        self._evader_action_step_flag = False
+        self._pursuer_action_step_flag = False
         self.reward_history = []
         self.final_relative_distance = None
 
@@ -527,6 +533,12 @@ class PursuitEvasionEnv(gym.Env):
         else:
             self._prev_state = None
 
+        k_interval = max(1, int(self.k))
+        evader_acted = ((self.step_count + self.evader_phase) % k_interval) == 0
+        pursuer_acted = ((self.step_count + self.pursuer_phase) % k_interval) == 0
+        self._evader_action_step_flag = evader_acted
+        self._pursuer_action_step_flag = pursuer_acted
+
         # 정규화 액션 → 실제 delta-v
         action_e = self._denormalize_action(normalized_action_e)
         if np.isnan(action_e).any():
@@ -534,13 +546,18 @@ class PursuitEvasionEnv(gym.Env):
                 print(f"WARNING: action_e에 NaN 값 감지됨: {action_e}")
             action_e = np.zeros_like(action_e)
 
-        delta_v_e = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax).astype(np.float32, copy=False)
+        delta_v_e_cmd = np.clip(action_e, -self.delta_v_emax, self.delta_v_emax).astype(np.float32, copy=False)
+        if evader_acted:
+            delta_v_e = delta_v_e_cmd
+        else:
+            delta_v_e = np.zeros(3, dtype=np.float32)
         delta_v_e_mag = float(np.linalg.norm(delta_v_e))
-        self.total_delta_v_e += delta_v_e_mag
+        if evader_acted:
+            self.total_delta_v_e += delta_v_e_mag
         self._last_evader_dv = np.asarray(delta_v_e, dtype=np.float64)
 
         # 추격자 행동 결정
-        if self.step_count % self.k == 0:
+        if pursuer_acted:
             delta_v_p = self.compute_interception_strategy(self.state)
             delta_v_p = np.asarray(delta_v_p, dtype=np.float32)
             self.pursuer_last_action = delta_v_p
@@ -613,7 +630,8 @@ class PursuitEvasionEnv(gym.Env):
             "evader_impulse_count": len(self.evader_impulse_history),
             "complete_orbits": self.complete_orbits,
             "orbital_phase": self.orbit_time_tracker / self.orbital_period if self.orbital_period > 0 else 0.0,
-            "pursuer_action_step": self.step_count % self.k == 0,
+            "evader_action_step": evader_acted,
+            "pursuer_action_step": pursuer_acted,
         })
 
         if termination_info:
@@ -1054,7 +1072,7 @@ class PursuitEvasionEnv(gym.Env):
             fuel_bonus = 0.001 * fuel_remaining if fuel_remaining > 0 else 0
 
             dodge_bonus = 0
-            if self.step_count % self.k == 0 and rho_mag > self.capture_distance * 3:
+            if getattr(self, "_pursuer_action_step_flag", False) and rho_mag > self.capture_distance * 3:
                 dodge_bonus = 0.1
 
             evader_reward = (
