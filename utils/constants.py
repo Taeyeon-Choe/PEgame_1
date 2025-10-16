@@ -45,7 +45,7 @@ ENV_PARAMS = {
     "c": 0.01,  # 제어 비용 계수
     "max_steps": 1200,  # 최대 스텝 수 (dt*max_steps = 18000s = 300min)
     "max_delta_v_budget": 250.0,  # 최대 추진제 예산 (m/s)
-    "max_initial_separation": 3e3,  # 최대 초기 분리 거리 (m)
+    "max_initial_separation": 1e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
     "use_gastm": True,
     # === Reward / LQ Zero-Sum options ===
