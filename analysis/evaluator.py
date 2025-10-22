@@ -64,7 +64,6 @@ class ModelEvaluator:
         zero_sum_metrics = {
             'evader_rewards': [],
             'pursuer_rewards': [],
-            'nash_metrics': [],
             'evader_impulse_counts': [],
             'safety_scores': [],
             'buffer_times': []
@@ -277,7 +276,6 @@ class ModelEvaluator:
         
         zero_sum_metrics['evader_rewards'].append(np.mean(rewards['evader']))
         zero_sum_metrics['pursuer_rewards'].append(np.mean(rewards['pursuer']))
-        zero_sum_metrics['nash_metrics'].append(info.get('nash_metric', 0))
         zero_sum_metrics['evader_impulse_counts'].append(info.get('evader_impulse_count', 0))
         
         if 'safety_score' in info:
@@ -402,7 +400,6 @@ class ModelEvaluator:
             states, actions_e, actions_p,
             title=title,
             save_path=f"{save_dir}/test_{scenario_id}_trajectory",
-            nash_info=info.get('nash_metric'),
             safety_info=info.get('safety_score'),
             buffer_time=info.get('buffer_time')
         )
@@ -557,22 +554,21 @@ class ModelEvaluator:
     def _save_zero_sum_metrics(self, zero_sum_metrics: Dict, save_dir: str):
         """Zero-Sum 메트릭 CSV 저장"""
         with open(f"{save_dir}/zero_sum_metrics.csv", "w") as f:
-            f.write("episode,evader_reward,pursuer_reward,nash_metric,impulse_count,safety_score,buffer_time\n")
+            f.write("episode,evader_reward,pursuer_reward,impulse_count,safety_score,buffer_time\n")
             
             n_episodes = len(zero_sum_metrics['evader_rewards'])
             for i in range(n_episodes):
                 evader_reward = zero_sum_metrics['evader_rewards'][i]
                 pursuer_reward = zero_sum_metrics['pursuer_rewards'][i]
-                nash_metric = zero_sum_metrics['nash_metrics'][i]
                 impulse_count = zero_sum_metrics['evader_impulse_counts'][i]
                 
                 safety_score = (zero_sum_metrics['safety_scores'][i] 
-                              if i < len(zero_sum_metrics['safety_scores']) else 0)
+                                  if i < len(zero_sum_metrics['safety_scores']) else 0)
                 buffer_time = (zero_sum_metrics['buffer_times'][i] 
                              if i < len(zero_sum_metrics['buffer_times']) else 0)
                 
                 f.write(f"{i+1},{evader_reward:.4f},{pursuer_reward:.4f},"
-                       f"{nash_metric:.4f},{impulse_count},{safety_score:.4f},{buffer_time:.2f}\n")
+                       f"{impulse_count},{safety_score:.4f},{buffer_time:.2f}\n")
     
     def run_demonstration(self, save_dir: Optional[str] = None,
                          deterministic: bool = True) -> Dict[str, Any]:
@@ -613,7 +609,6 @@ class ModelEvaluator:
             f.write(f"\n회피자 평균 보상: {np.mean(rewards['evader']):.4f}\n")
             f.write(f"추격자 평균 보상: {np.mean(rewards['pursuer']):.4f}\n")
             f.write(f"Zero-Sum 검증: {np.mean(rewards['evader']) + np.mean(rewards['pursuer']):.6f}\n")
-            f.write(f"Nash Equilibrium 메트릭: {info.get('nash_metric', 0):.4f}\n")
             f.write(f"종료 조건: {info.get('termination_type', 'unknown')}\n")
             f.write(f"버퍼 시간: {info.get('buffer_time', 0):.2f} 초\n")
             f.write(f"안전도 점수: {info.get('safety_score', 0):.4f}\n")

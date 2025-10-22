@@ -295,10 +295,6 @@ def calculate_zero_sum_metrics(rewards: Dict[str, List[float]], info: Dict[str, 
     metrics['zero_sum_violation'] = abs(reward_sum)
     metrics['zero_sum_compliance'] = 1.0 / (1.0 + abs(reward_sum))
     
-    # Nash Equilibrium 관련
-    nash_metric = info.get('nash_metric', 0.0)
-    metrics['nash_equilibrium_metric'] = nash_metric
-    
     # 게임 이론적 성능
     evader_advantage = sum(evader_rewards) / (sum(evader_rewards) + sum(pursuer_rewards) + 1e-10)
     metrics['evader_advantage'] = evader_advantage

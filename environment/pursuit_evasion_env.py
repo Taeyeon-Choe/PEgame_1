@@ -100,10 +100,6 @@ class PursuitEvasionEnv(gym.Env):
         self.reward_history = []
         self.reward_term_totals: Optional[Dict[str, float]] = None
 
-        # Zero-Sum 게임 관련
-        self.zero_sum = True
-        self.nash_metric = 0.0
-
     def _init_parameters(self):
         """환경 파라미터 초기화"""
         self.dt = float(self.config.dt)
@@ -121,6 +117,8 @@ class PursuitEvasionEnv(gym.Env):
         self.max_steps = self.config.max_steps
         self.max_delta_v_budget = self.config.max_delta_v_budget
         self.max_initial_separation = self.config.max_initial_separation
+        # 추격자 보상/통계 기록 여부 (추후 추격자 학습/분석 시 활용)
+        self.track_pursuer_metrics = bool(getattr(self.config, "track_pursuer_metrics", True))
 
         # 정규화 스케일
         self.pos_scale = self.max_initial_separation
@@ -309,10 +307,10 @@ class PursuitEvasionEnv(gym.Env):
         # 재샘플링 루프
         for _ in range(100):
             # deputy COE 샘플
-            a_p = a_e + np.random.uniform(-50.0, 50.0)
-            e_p = max(1e-4, e_e + np.random.uniform(-7e-4, 7e-4))
-            i_p = i_e + np.random.uniform(-0.05, 0.05) * deg2rad
-            RAAN_p = RAAN_e + np.random.uniform(-0.05, 0.05) * deg2rad
+            a_p = a_e + np.random.uniform(-5000, 5000)
+            e_p = max(1e-3, e_e + np.random.uniform(-5e-3, 5e-3))
+            i_p = i_e + np.random.uniform(-0.01, 0.01) * deg2rad
+            RAAN_p = RAAN_e + np.random.uniform(0.01, 0.01) * deg2rad
             omega_p = omega_e + np.random.uniform(-0.05, 0.05) * deg2rad
 
             # 원하는 along-track 오프셋
@@ -375,9 +373,6 @@ class PursuitEvasionEnv(gym.Env):
         self._pursuer_action_step_flag = False
         self.reward_history = []
         self.final_relative_distance = None
-
-        # Nash Equilibrium 관련 변수 초기화
-        self.nash_metric = 0.0
 
         reward_mode = getattr(self.config, "reward_mode", "original")
         if reward_mode in ("lq_zero_sum", "lq_zero_sum_shaped"):
@@ -598,9 +593,11 @@ class PursuitEvasionEnv(gym.Env):
         if info is None:
             info = {}
 
-        # Nash Equilibrium 메트릭 업데이트 및 기록
-        self._update_nash_metric()
-        self.reward_history.append({"evader": evader_reward, "pursuer": pursuer_reward})
+        if self.track_pursuer_metrics:
+            # NOTE: 추격자 학습/분석이 필요할 때만 보관
+            self.reward_history.append({"evader": evader_reward, "pursuer": pursuer_reward})
+        else:
+            self.reward_history.append(evader_reward)
 
         # 관측값 생성
         observed_state = self.observe(self.state)
@@ -625,7 +622,6 @@ class PursuitEvasionEnv(gym.Env):
             "fuel_fraction_used": self.total_delta_v_e / self.max_delta_v_budget,
             "simulation_time_s": float(self.t),
             "time_step_index": int(self.step_count),
-            "nash_metric": self.nash_metric,
             "evader_delta_v_sum": self.delta_v_e_sum.copy(),
             "evader_impulse_count": len(self.evader_impulse_history),
             "complete_orbits": self.complete_orbits,
@@ -651,7 +647,7 @@ class PursuitEvasionEnv(gym.Env):
                 "r": total_evader_reward,
                 "l": self.step_count,
             }
-            info.update({
+            final_info = {
                 "outcome": termination_info.get("outcome", "unknown"),
                 "termination_details": termination_info,
                 "initial_evader_orbital_elements": self.initial_evader_orbital_elements,
@@ -659,13 +655,18 @@ class PursuitEvasionEnv(gym.Env):
                 "initial_relative_distance": self.initial_relative_distance,
                 "final_relative_distance": self.final_relative_distance,
                 "evader_final_step_reward": evader_reward,
-                "pursuer_final_step_reward": pursuer_reward,
                 "evader_total_reward": total_evader_reward,
-                "pursuer_total_reward": total_pursuer_reward,
                 "evader_reward": total_evader_reward,
-                "pursuer_reward": total_pursuer_reward,
                 "episode": episode_summary,
-            })
+            }
+            if self.track_pursuer_metrics:
+                # NOTE: 추격자 학습/평가 시에만 보상 관련 필드를 노출
+                final_info.update({
+                    "pursuer_final_step_reward": pursuer_reward,
+                    "pursuer_total_reward": total_pursuer_reward,
+                    "pursuer_reward": total_pursuer_reward,
+                })
+            info.update(final_info)
 
         return normalized_obs.astype(np.float32, copy=False), evader_reward, terminated, truncated, info
 
@@ -934,8 +935,8 @@ class PursuitEvasionEnv(gym.Env):
             if capture_ratio > 0.8:
                 self.termination_details = {
                     "outcome": "captured",
-                    "evader_reward": -10,
-                    "pursuer_reward": 10,
+                    "evader_reward": -150,
+                    "pursuer_reward": 50,
                     "buffer_time": self.orbital_buffer_capture * self.dt,
                     "relative_distance": rho_mag,
                     "orbit_consistency": f"{capture_ratio:.1%} over {self.complete_orbits} orbits",
@@ -947,7 +948,7 @@ class PursuitEvasionEnv(gym.Env):
         if self.total_delta_v_e > self.max_delta_v_budget:
             self.termination_details = {
                 "outcome": "fuel_depleted",
-                "evader_reward": -5,
+                "evader_reward": -150,
                 "pursuer_reward": 5,
                 "relative_distance": rho_mag,
                 "delta_v_used": self.total_delta_v_e,
@@ -1085,6 +1086,9 @@ class PursuitEvasionEnv(gym.Env):
                 "evader_reward": evader_reward,
                 "pursuer_reward": pursuer_reward,
             }
+
+        if not self.track_pursuer_metrics:
+            info.pop("pursuer_reward", None)
 
         return evader_reward, pursuer_reward, info
 
@@ -1355,21 +1359,16 @@ class PursuitEvasionEnv(gym.Env):
         info["rE_lq"] = rE
         info["rP_lq"] = rP
 
+        if not self.track_pursuer_metrics:
+            info.pop("pursuer_reward", None)
+            info.pop("rP_lq", None)
+
         if done and tracking_terms:
             breakdown = {key: float(value) for key, value in self.reward_term_totals.items()}
             termination_info["evader_reward_breakdown"] = breakdown
             info["evader_reward_breakdown"] = breakdown
 
         return rE, rP, info
-
-    def _update_nash_metric(self):
-        """Nash Equilibrium 메트릭 업데이트"""
-        if len(self.reward_history) >= 100:
-            recent_rewards = [r.get("evader", 0) for r in self.reward_history[-100:]]
-            reward_std = np.std(recent_rewards)
-            self.nash_metric = 1.0 / (1.0 + reward_std)
-        else:
-            self.nash_metric = 0.5
 
     def analyze_results(
         self, states: np.ndarray, actions_e: np.ndarray, actions_p: np.ndarray
@@ -1405,7 +1404,6 @@ class PursuitEvasionEnv(gym.Env):
             "pursuer_total_delta_v_ms": total_p_delta_v,
             "mean_evader_reward": mean_evader_reward,
             "mean_pursuer_reward": mean_pursuer_reward,
-            "nash_metric": self.nash_metric,
             "success": success,
             "trajectory_length": len(states),
             "complete_orbits": self.complete_orbits,

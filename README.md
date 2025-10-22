@@ -4,11 +4,11 @@
 This repository provides a reinforcement learning research framework for orbital pursuit-evasion scenarios.  
 The environment simulates two satellites in Earth orbit with high-fidelity dynamics (Keplerian motion, J2 perturbation, and non-linear relative motion).  
 Training is built on top of Stable-Baselines3 and targets continuous-action agents such as Soft Actor-Critic, TD3, and DDPG.  
-On top of standard RL training you can explore minimax/Nash equilibrium strategies, automated evaluation pipelines, and rich post-processing that exports plots, CSV summaries, and MATLAB scripts.
+On top of standard RL training you can leverage automated evaluation pipelines and rich post-processing that exports plots, CSV summaries, and MATLAB scripts.
 
 ## Key Features
 - **Physics-accurate environment**: `environment/PursuitEvasionEnv` numerically propagates the evader’s chief orbit, enforces delta-V budgets, sensor ranges, stochastic noise, and multi-step capture/evasion buffers. The GA-STM variant (`PursuitEvasionEnvGASTM`) supports fast Gim-Alfriend state transition matrix propagation with TVLQR pursuer guidance.
-- **Flexible RL stack**: `training/trainer.py` wraps Stable-Baselines3 (SAC/TD3/DDPG), multi-process vector environments, gSDE stabilisation, replay-buffer persistence, and periodic checkpointing. A minimax workflow in `training/nash_equilibrium.py` alternates evader training with pursuer strategy optimisation. 
+- **Flexible RL stack**: `training/trainer.py` wraps Stable-Baselines3 (SAC/TD3/DDPG), multi-process vector environments, gSDE stabilisation, replay-buffer persistence, and periodic checkpointing.
 - **Comprehensive analysis**: `analysis/evaluator.py` batch-evaluates trained policies, logs orbital trajectories, reward breakdowns, delta-V usage, and success/failure distributions. `analysis/visualization.py` renders 2D/3D trajectories, moving-average learning curves, SAC diagnostics, and produces CSV/Matlab artefacts for further study.
 - **Configurable by design**: `config/settings.py` exposes typed dataclasses for orbit geometry, environment physics, training hyperparameters, plotting style, and output paths. Config objects auto-create directory structures and respect debug/GPU flags.
 - **Tooling & reproducibility**: Extensive pytest coverage under `tests/`, reproducible experiment folders under `logs/`, Docker and Docker Compose files for CPU/GPU setups, and example notebooks/scripts for quick experiments.
@@ -19,7 +19,7 @@ On top of standard RL training you can explore minimax/Nash equilibrium strategi
 | `main.py` | Command-line entry point with interactive menu, training/evaluation modes, and runtime overrides. |
 | `config/` | Dataclasses and helpers for environment/training configuration and path management. |
 | `environment/` | Pursuit-evasion Gymnasium environments (full dynamics and GA-STM accelerated variant). |
-| `training/` | Trainer classes, callbacks, Nash equilibrium routines, and helper utilities. |
+| `training/` | Trainer classes, callbacks, and helper utilities. |
 | `analysis/` | Evaluation scripts, visualisation helpers, metrics, and MATLAB template renderers. |
 | `orbital_mechanics/` | Orbital dynamics primitives (chief orbit propagation, coordinate transforms, STM propagator). |
 | `controllers/` | Pursuer guidance implementations including TVLQR control. |
@@ -55,7 +55,7 @@ The command instantiates core packages and confirms that dependencies are correc
 ## Training Workflows
 
 ### Interactive launcher
-Running `python main.py` without arguments opens an interactive prompt that guides you through standard training, Nash equilibrium experiments, evaluations, and demos.
+Running `python main.py` without arguments opens an interactive prompt that guides you through standard training, evaluations, and demos.
 
 ### Standard RL training
 ```bash
@@ -75,12 +75,6 @@ Key runtime flags:
 - `--reward-mode`: switch between `original`, `lq_zero_sum`, and shaped variants.
 
 Training artefacts are stored at `logs/<experiment>_<timestamp>/` and include JSON configs, SB3 checkpoints (`models/`), TensorBoard summaries, CSV histories, and rendered plots.
-
-### Nash equilibrium (minimax) training
-```bash
-python main.py --mode train_nash --experiment-name minimax_sac --timesteps 100000
-```
-`training/nash_equilibrium.py` alternates evader SAC updates with pursuer optimisation episodes, records Nash metrics, and saves intermediate models (`models/nash_iter*.zip`). The evaluator can later be reused to inspect convergence statistics.
 
 ## Evaluation & Visualisation
 ```bash

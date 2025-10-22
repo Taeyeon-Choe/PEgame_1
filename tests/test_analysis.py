@@ -30,7 +30,6 @@ class TestMetrics:
         
         self.info = {
             'safety_score': 0.5,
-            'nash_metric': 0.3,
             'outcome': 'captured'
         }
     

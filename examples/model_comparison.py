@@ -16,14 +16,14 @@ def main():
     # 비교할 모델 경로들
     model_paths = [
         "models/standard_model.zip",
-        "models/nash_equilibrium_model.zip",
-        "models/fine_tuned_model.zip"
+        "models/variant_model.zip",
+        "models/fine_tuned_model.zip",
     ]
     
     model_names = [
         "Standard SAC",
-        "Nash Equilibrium",
-        "Fine-tuned Model"
+        "Variant SAC",
+        "Fine-tuned Model",
     ]
     
     # 1. 설정 및 환경 생성
@@ -59,8 +59,6 @@ def main():
     print('-' * 45)
     
     for name, results in comparison_results.items():
-        print(f"{name:<20} {results['success_rate']:<10.1f}% "
-              f"{results['avg_final_distance']:<12.0f} "
         print(f"{name:<20} {results['success_rate']:<10.1f}% {results['avg_final_distance']:<12.0f}")
     
     # 5. 정리

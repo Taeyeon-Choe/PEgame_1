@@ -83,7 +83,6 @@ setup(
         "satellite",
         "orbital mechanics", 
         "game theory",
-        "nash equilibrium",
         "pursuit evasion",
         "space",
         "deep learning",

@@ -20,7 +20,6 @@ from analysis.visualization import (
     aggregate_outcome_counts,
     plot_sac_training_metrics,
 )
-from utils.constants import ANALYSIS_PARAMS
 
 
 def _json_ready(value):
@@ -112,7 +111,6 @@ class EvasionTrackingCallback(BaseCallback):
         # Zero-Sum 게임 메트릭
         self.evader_rewards = []
         self.pursuer_rewards = []
-        self.nash_equilibrium_metrics = []
         self.episode_rewards = []
         self.reward_breakdowns: List[Dict[str, float]] = []
         
@@ -123,10 +121,6 @@ class EvasionTrackingCallback(BaseCallback):
         # 초기 조건과 결과 기록
         self.episodes_info = []
         
-        # Nash Equilibrium 평가를 위한 정책 히스토리
-        self.policy_history = []
-        self.eval_frequency = ANALYSIS_PARAMS['eval_frequency']
-
         self._resume_enabled = resume
         if resume and resume_data:
             self._restore_from_resume(resume_data)
@@ -208,7 +202,6 @@ class EvasionTrackingCallback(BaseCallback):
         self._update_outcome_counts(outcome)
         self.evader_rewards.append(evader_reward)
         self.pursuer_rewards.append(pursuer_reward)
-        self.nash_equilibrium_metrics.append(info.get('nash_metric', 0))
         self.episode_rewards.append(episode_reward)
 
         breakdown = termination_details.get('evader_reward_breakdown') or info.get('evader_reward_breakdown') or {}
@@ -240,7 +233,6 @@ class EvasionTrackingCallback(BaseCallback):
             'success': success,
             'evader_reward': evader_reward,
             'pursuer_reward': pursuer_reward,
-            'nash_metric': self.nash_equilibrium_metrics[-1] if self.nash_equilibrium_metrics else 0,
             'buffer_time': buffer_time,
             'evader_elements': info.get('initial_evader_orbital_elements', {}),
             'pursuer_elements': info.get('initial_pursuer_orbital_elements', {}),
@@ -376,12 +368,11 @@ class EvasionTrackingCallback(BaseCallback):
             print(f"  - 최근 평균 ΔV 사용량: {np.mean(window_values):.2f} m/s")
             print(f"  - 누적 ΔV 평균: {np.mean(self.evader_delta_vs):.2f} m/s")
 
-        # Nash Equilibrium 메트릭 출력
-        if len(self.nash_equilibrium_metrics) > 0:
-            print(f"  - Nash Equilibrium 메트릭: {self.nash_equilibrium_metrics[-1]:.4f}")
-            print(f"  - 최근 회피자/추격자 보상 평균: {np.mean(self.evader_rewards[-100:]):.4f}/"
-                  f"{np.mean(self.pursuer_rewards[-100:]):.4f}")
-            print(f"  - Zero-Sum 검증: {np.mean(self.evader_rewards[-100:]) + np.mean(self.pursuer_rewards[-100:]):.6f}")
+        if self.evader_rewards:
+            recent_evader = np.mean(self.evader_rewards[-100:])
+            recent_pursuer = np.mean(self.pursuer_rewards[-100:])
+            print(f"  - 최근 회피자/추격자 보상 평균: {recent_evader:.4f}/{recent_pursuer:.4f}")
+            print(f"  - Zero-Sum 검증: {recent_evader + recent_pursuer:.6f}")
         
         # 최근 에피소드 정보 출력
         if self.episodes_info:
@@ -426,7 +417,6 @@ class EvasionTrackingCallback(BaseCallback):
             if self.evader_rewards:
                 self.logger.record("zero_sum/evader_reward", np.mean(self.evader_rewards[-100:]))
                 self.logger.record("zero_sum/pursuer_reward", np.mean(self.pursuer_rewards[-100:]))
-                self.logger.record("zero_sum/nash_metric", self.nash_equilibrium_metrics[-1])
     
     def plot_interim_results(self):
         """중간 결과 플롯 생성"""
@@ -451,7 +441,6 @@ class EvasionTrackingCallback(BaseCallback):
                 outcome_counts=outcome_counts,
                 evader_rewards=self.evader_rewards,
                 pursuer_rewards=self.pursuer_rewards,
-                nash_metrics=self.nash_equilibrium_metrics,
                 buffer_times=[_json_ready(bt) for bt in self.buffer_time_stats],
                 episode_count=self.episode_count,
                 save_dir=self.log_dir,
@@ -544,7 +533,6 @@ class EvasionTrackingCallback(BaseCallback):
         self.success_rates = [float(x) for x in data.get("success_rates", self.success_rates)]
         self.evader_rewards = [float(x) for x in data.get("evader_rewards", self.evader_rewards)]
         self.pursuer_rewards = [float(x) for x in data.get("pursuer_rewards", self.pursuer_rewards)]
-        self.nash_equilibrium_metrics = [float(x) for x in data.get("nash_metrics", self.nash_equilibrium_metrics)]
         self.episode_rewards = [float(x) for x in data.get("episode_rewards", self.episode_rewards)]
         self.buffer_time_stats = [float(x) for x in data.get("buffer_times", self.buffer_time_stats)]
         self.evader_delta_vs = [float(x) for x in data.get("evader_delta_vs", self.evader_delta_vs)]
@@ -641,7 +629,6 @@ class EvasionTrackingCallback(BaseCallback):
             "max_steps": self.max_steps,
             "evader_rewards": self.evader_rewards,
             "pursuer_rewards": self.pursuer_rewards,
-            "nash_metrics": self.nash_equilibrium_metrics,
             "buffer_times": self.buffer_time_stats,
             "episode_rewards": self.episode_rewards[-self.success_window.maxlen:] if self.episode_rewards else [],
             "evader_delta_vs": self.evader_delta_vs,
@@ -686,7 +673,6 @@ class PerformanceCallback(BaseCallback):
         self.outcome_counter = Counter()
         self.evader_rewards = []
         self.pursuer_rewards = []
-        self.nash_metrics = []
         self.buffer_times = []
         self.episode_count = 0
         
@@ -765,7 +751,6 @@ class PerformanceCallback(BaseCallback):
             pursuer_reward = float(final_info.get("pursuer_total_reward", final_info.get("pursuer_reward", -evader_reward)))
             self.evader_rewards.append(evader_reward)
             self.pursuer_rewards.append(pursuer_reward)
-            self.nash_metrics.append(final_info.get("nash_metric", 0.0))
             self.buffer_times.append(final_info.get("buffer_time", 0.0))
 
             outcome = str(final_info.get("outcome", "unknown")).lower()
@@ -790,13 +775,11 @@ class PerformanceCallback(BaseCallback):
                 self.logger.record("performance/success_rate_ma", success_rate)
                 self.logger.record("performance/evader_total_reward", float(evader_reward))
                 self.logger.record("performance/pursuer_total_reward", float(pursuer_reward))
-                self.logger.record("performance/nash_metric", float(self.nash_metrics[-1]))
 
             if self.verbose > 0 and self.episode_count % 10 == 0:
                 print(f"\n에피소드 {self.episode_count}:")
                 print(f"  보상: {episode_reward:.2f}")
                 print(f"  성공률(최근 {len(self.success_window)}): {success_rate:.1%}")
-                print(f"  Nash 메트릭: {self.nash_metrics[-1]:.3f}")
                 print(f"  타임스텝: {self.num_timesteps}")
                 summary_counts = self._summary_outcome_counts()
                 if summary_counts:
@@ -857,7 +840,6 @@ class PerformanceCallback(BaseCallback):
                 },
                 evader_rewards=self.evader_rewards,
                 pursuer_rewards=self.pursuer_rewards,
-                nash_metrics=self.nash_metrics,
                 buffer_times=self.buffer_times,
                 episode_count=self.episode_count,
                 save_dir=self.plot_dir,
@@ -885,7 +867,6 @@ class PerformanceCallback(BaseCallback):
             "episodes_completed": int(self.episode_count),
             "final_success_rate": float(self.success_rates[-1]) if self.success_rates else 0.0,
             "average_reward": float(np.mean(self.episode_rewards)) if self.episode_rewards else 0.0,
-            "final_nash_metric": float(self.nash_metrics[-1]) if self.nash_metrics else 0.0,
         }
 
         summary_counts, evaded_breakdown = aggregate_outcome_counts(
@@ -925,7 +906,6 @@ class PerformanceCallback(BaseCallback):
 
         self.evader_rewards = [float(x) for x in data.get("evader_rewards", self.evader_rewards)]
         self.pursuer_rewards = [float(x) for x in data.get("pursuer_rewards", self.pursuer_rewards)]
-        self.nash_metrics = [float(x) for x in data.get("nash_metrics", self.nash_metrics)]
         self.buffer_times = [float(x) for x in data.get("buffer_times", self.buffer_times)]
 
         outcome_counts = data.get("outcome_counts")

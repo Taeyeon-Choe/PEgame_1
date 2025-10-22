@@ -80,6 +80,7 @@ class EnvironmentConfig:
     terminal_huber_vel_delta: float = ENV_PARAMS["terminal_huber_vel_delta"]
     use_rayleigh_terminal_scaling: bool = ENV_PARAMS["use_rayleigh_terminal_scaling"]
     terminal_rayleigh_scale: Optional[float] = ENV_PARAMS["terminal_rayleigh_scale"]
+    track_pursuer_metrics: bool = ENV_PARAMS["track_pursuer_metrics"]
 
     # 버퍼 설정
     capture_buffer_steps: int = BUFFER_PARAMS["capture_buffer_steps"]
@@ -92,7 +93,6 @@ class TrainingConfig:
     """학습 설정"""
 
     total_timesteps: int = TRAINING_PARAMS["total_timesteps"]
-    nash_total_timesteps: int = TRAINING_PARAMS["nash_total_timesteps"]
     algorithm: str = "SAC"
     learning_rate: float = TRAINING_PARAMS["learning_rate"]
     buffer_size: int = TRAINING_PARAMS["buffer_size"]
@@ -182,9 +182,6 @@ class ProjectConfig:
         # 디버그 모드에서는 스텝 수 감소
         if self.debug_mode:
             self.training.total_timesteps = min(1000, self.training.total_timesteps)
-            self.training.nash_total_timesteps = min(
-                5000, self.training.nash_total_timesteps
-            )
             self.environment.max_steps = min(100, self.environment.max_steps)
             self.training.n_envs = 1
 

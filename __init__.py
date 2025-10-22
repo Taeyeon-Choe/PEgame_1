@@ -19,13 +19,13 @@ from . import utils
 
 # 편의를 위한 주요 클래스 직접 import
 from .environment import PursuitEvasionEnv
-from .training import SACTrainer, NashEquilibriumTrainer
+from .training import SACTrainer
 from .analysis import ModelEvaluator
 from .config import get_config, ProjectConfig
 
 __all__ = [
     'config', 'orbital_mechanics', 'environment', 
     'training', 'analysis', 'utils',
-    'PursuitEvasionEnv', 'SACTrainer', 'NashEquilibriumTrainer',
+    'PursuitEvasionEnv', 'SACTrainer',
     'ModelEvaluator', 'get_config', 'ProjectConfig'
 ]

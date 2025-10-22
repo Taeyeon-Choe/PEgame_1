@@ -130,6 +130,56 @@ def plot_sac_training_metrics(progress_path: str,
     if not os.path.exists(progress_path):
         return
 
+    def _merge_with_existing(metric_file: str,
+                             metric_key: str,
+                             new_steps: List[float],
+                             new_values: List[float]) -> Tuple[List[float], List[float]]:
+        """
+        기존 CSV에 저장된 메트릭과 새 progress 데이터를 병합하여 누적 시퀀스를 반환한다.
+
+        Args:
+            metric_file: 저장되어 있는 CSV 경로
+            metric_key: CSV 컬럼명 (metric_safe)
+            new_steps: progress.csv에서 읽은 시간축
+            new_values: progress.csv에서 읽은 메트릭 값
+
+        Returns:
+            (combined_steps, combined_values) 누적 시퀀스 (step 기준 오름차순)
+        """
+        combined: Dict[float, float] = {}
+
+        if os.path.exists(metric_file):
+            try:
+                with open(metric_file, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        step_val = row.get('total_timesteps')
+                        metric_val = row.get(metric_key)
+                        if step_val in (None, '') or metric_val in (None, ''):
+                            continue
+                        try:
+                            step = float(step_val)
+                            value = float(metric_val)
+                        except (TypeError, ValueError):
+                            continue
+                        combined[step] = value
+            except (OSError, ValueError):
+                # 기존 파일 파싱 실패 시 새 데이터만 사용
+                combined.clear()
+
+        for step, value in zip(new_steps, new_values):
+            try:
+                combined[float(step)] = float(value)
+            except (TypeError, ValueError):
+                continue
+
+        if not combined:
+            return [], []
+
+        ordered_steps = sorted(combined.keys())
+        ordered_values = [combined[step] for step in ordered_steps]
+        return ordered_steps, ordered_values
+
     metrics = metrics or [
         'train/actor_loss',
         'train/critic_loss',
@@ -146,24 +196,30 @@ def plot_sac_training_metrics(progress_path: str,
         if len(steps) < 2 or len(values) < 2:
             continue
 
-        avg_values = moving_average(values, min(window, len(values)))
+        metric_safe = metric.replace('/', '_')
+        metric_csv_path = f'{save_dir}/{metric_safe}.csv'
+
+        combined_steps, combined_values = _merge_with_existing(metric_csv_path, metric_safe, steps, values)
+        if len(combined_steps) < 2:
+            continue
+
+        avg_values = moving_average(combined_values, window)
 
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-        plt.plot(steps, values, label=metric, color='tab:blue', alpha=0.4, linewidth=0.9)
-        plt.plot(steps, avg_values, label=f'Moving Average ({window})', color='tab:blue', linewidth=2)
+        plt.plot(combined_steps, combined_values, label=metric, color='tab:blue', alpha=0.4, linewidth=0.9)
+        plt.plot(combined_steps, avg_values, label=f'Moving Average ({window})', color='tab:blue', linewidth=2)
         plt.xlabel('Total Timesteps')
         plt.ylabel(metric)
         plt.title(metric)
         plt.grid(True, alpha=0.3)
         plt.legend()
         plt.tight_layout()
-        metric_safe = metric.replace('/', '_')
         plt.savefig(f'{save_dir}/{metric_safe}.png', dpi=PLOT_PARAMS['dpi'])
         plt.close()
 
         metric_data = {
-            'total_timesteps': steps,
-            metric_safe: values,
+            'total_timesteps': combined_steps,
+            metric_safe: combined_values,
             f'{metric_safe}_ma': avg_values,
         }
         save_data_to_csv(metric_data, f'{save_dir}/{metric_safe}.csv')
@@ -249,7 +305,6 @@ def plot_training_progress(success_rates: List[float],
                           outcome_counts,
                           evader_rewards: List[float],
                           pursuer_rewards: List[float],
-                          nash_metrics: List[float],
                           buffer_times: List[float],
                           episode_count: int,
                           save_dir: str,
@@ -543,34 +598,7 @@ def plot_training_progress(success_rates: List[float],
         }
         save_data_to_csv(rewards_data, f'{save_dir}/rewards_data.csv')
     
-    # 4. Nash Equilibrium 메트릭 그래프
-    if nash_metrics:
-        plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-        eval_episodes = list(range(0, episode_count, 10))  # 10 에피소드마다 평가 가정
-
-        # eval_episodes와 nash_metrics 길이를 맞추기 위한 처리
-        min_len = min(len(eval_episodes), len(nash_metrics))
-        episodes_to_plot = eval_episodes[:min_len]
-        nash_to_plot = nash_metrics[:min_len]
-
-        plt.plot(episodes_to_plot, nash_to_plot, 'b-', linewidth=2)
-        plt.xlabel('Episode')
-        plt.ylabel('Nash Equilibrium Metric')
-        plt.title('Nash Equilibrium Convergence')
-        plt.grid(True, alpha=0.3)
-        plt.ylim(0, 1)
-        plt.tight_layout()
-        plt.savefig(f'{save_dir}/nash_metric.png', dpi=PLOT_PARAMS['dpi'])
-        plt.close()
-        
-        # Nash 메트릭 데이터 저장
-        nash_data = {
-            'episode': episodes_to_plot,
-            'nash_metric': nash_to_plot
-        }
-        save_data_to_csv(nash_data, f'{save_dir}/nash_metrics.csv')
-    
-    # 5. 버퍼 시간 통계 그래프
+    # 4. 버퍼 시간 통계 그래프
     if buffer_times:
         plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
         plt.hist(buffer_times, bins=20, alpha=0.7, color='blue', edgecolor='black')
@@ -601,7 +629,6 @@ def plot_training_progress(success_rates: List[float],
         'outcome_counts': outcome_counts,
         'evader_rewards': evader_rewards[-1000:] if len(evader_rewards) > 1000 else evader_rewards,  # 최근 1000개만
         'pursuer_rewards': pursuer_rewards[-1000:] if len(pursuer_rewards) > 1000 else pursuer_rewards,
-        'nash_metrics': nash_metrics,
         'buffer_times': buffer_times,
         'macro_counts': macro_counts,
         'episode_rewards': episode_rewards_limited,
@@ -656,7 +683,7 @@ def plot_delta_v_components(
 ) -> None:
     """Evader와 Pursuer의 Delta-V 성분 그래프를 저장.
 
-    각 에이전트의 vx, vy, vz 성분을 스텝에 따라 플로팅한다.
+    각 에이전트의 vx, vy, vz 성분과 전체 크기를 스텝에 따라 플로팅한다.
 
     Args:
         actions_e: 회피자의 Delta-V 배열 (step x 3)
@@ -670,14 +697,23 @@ def plot_delta_v_components(
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
 
-    
+    if actions_e.ndim != 2 or actions_e.shape[1] != 3:
+        raise ValueError("actions_e must be of shape (steps, 3)")
+    if actions_p.ndim != 2 or actions_p.shape[1] != 3:
+        raise ValueError("actions_p must be of shape (steps, 3)")
+
     steps = np.arange(actions_e.shape[0])
     labels = ['vx', 'vy', 'vz']
+    colors = ['tab:blue', 'tab:orange', 'tab:green']
+
+    evader_mag = np.linalg.norm(actions_e, axis=1)
+    pursuer_mag = np.linalg.norm(actions_p, axis=1)
 
     # Evader plot
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-    for i, label in enumerate(labels):
-        plt.plot(steps, actions_e[:, i], label=label)
+    for i, (label, color) in enumerate(zip(labels, colors)):
+        plt.plot(steps, actions_e[:, i], label=label, color=color, linewidth=1.0)
+    plt.plot(steps, evader_mag, label='|Δv|', color='black', linestyle='--', linewidth=1.5)
     plt.xlabel('Step')
     plt.ylabel('Delta-V (m/s)')
     plt.title('Evader Delta-V Components')
@@ -686,10 +722,20 @@ def plot_delta_v_components(
     plt.savefig(f"{save_path}_evader_delta_v.png", dpi=PLOT_PARAMS['dpi'])
     plt.close()
 
+    evader_data = {
+        'step': steps.tolist(),
+        'dv_vx': actions_e[:, 0].tolist(),
+        'dv_vy': actions_e[:, 1].tolist(),
+        'dv_vz': actions_e[:, 2].tolist(),
+        'dv_mag': evader_mag.tolist(),
+    }
+    save_data_to_csv(evader_data, f"{save_path}_evader_delta_v.csv")
+
     # Pursuer plot
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-    for i, label in enumerate(labels):
-        plt.plot(steps, actions_p[:, i], label=label)
+    for i, (label, color) in enumerate(zip(labels, colors)):
+        plt.plot(steps, actions_p[:, i], label=label, color=color, linewidth=1.0)
+    plt.plot(steps, pursuer_mag, label='|Δv|', color='black', linestyle='--', linewidth=1.5)
     plt.xlabel('Step')
     plt.ylabel('Delta-V (m/s)')
     plt.title('Pursuer Delta-V Components')
@@ -698,13 +744,21 @@ def plot_delta_v_components(
     plt.savefig(f"{save_path}_pursuer_delta_v.png", dpi=PLOT_PARAMS['dpi'])
     plt.close()
 
+    pursuer_data = {
+        'step': steps.tolist(),
+        'dv_vx': actions_p[:, 0].tolist(),
+        'dv_vy': actions_p[:, 1].tolist(),
+        'dv_vz': actions_p[:, 2].tolist(),
+        'dv_mag': pursuer_mag.tolist(),
+    }
+    save_data_to_csv(pursuer_data, f"{save_path}_pursuer_delta_v.csv")
+
 
 def visualize_trajectory(states: np.ndarray,
                         actions_e: Optional[np.ndarray] = None,
                         actions_p: Optional[np.ndarray] = None,
                         title: str = "3D Trajectory",
                         save_path: Optional[str] = None,
-                        nash_info: Optional[float] = None,
                         safety_info: Optional[float] = None,
                         buffer_time: Optional[float] = None,
                         show_evader_actions: bool = False,
@@ -717,7 +771,6 @@ def visualize_trajectory(states: np.ndarray,
         actions_p: 추격자의 delta-v 기록
         title: 그래프 제목
         save_path: 저장 경로 (확장자 제외)
-        nash_info: 내쉬 메트릭
         safety_info: 안전도 메트릭
         buffer_time: 버퍼 시간
         show_evader_actions: 회피자 화살표 표시 여부
@@ -741,8 +794,6 @@ def visualize_trajectory(states: np.ndarray,
     
     # 제목에 정보 추가
     enhanced_title = title
-    if nash_info is not None:
-        enhanced_title += f"\nNash: {nash_info:.2f}"
     if safety_info is not None:
         enhanced_title += f", Safety: {safety_info:.2f}"
     if buffer_time is not None:
@@ -1064,22 +1115,7 @@ def plot_zero_sum_analysis(zero_sum_metrics: Dict, success: List[bool],
         plt.savefig(f"{save_dir}/zero_sum_rewards.png", dpi=PLOT_PARAMS['dpi'])
     plt.close()
     
-    # 2. Nash Equilibrium 메트릭
-    if 'nash_metrics' in zero_sum_metrics and zero_sum_metrics['nash_metrics']:
-        plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
-        plt.plot(episodes, zero_sum_metrics['nash_metrics'], 'b-', linewidth=2)
-        plt.xlabel('Test Run')
-        plt.ylabel('Nash Equilibrium Metric')
-        plt.title('Nash Equilibrium Metric by Test Run')
-        plt.grid(True, alpha=0.3)
-        plt.ylim(0, 1)
-        plt.tight_layout()
-        
-        if save_dir:
-            plt.savefig(f"{save_dir}/nash_metrics.png", dpi=PLOT_PARAMS['dpi'])
-        plt.close()
-    
-    # 3. Zero-Sum 검증 그래프
+    # 2. Zero-Sum 검증 그래프
     rewards_sum = [zero_sum_metrics['evader_rewards'][i] + zero_sum_metrics['pursuer_rewards'][i]
                   for i in range(len(zero_sum_metrics['evader_rewards']))]
     
@@ -1103,8 +1139,6 @@ def plot_zero_sum_analysis(zero_sum_metrics: Dict, success: List[bool],
             'pursuer_reward': zero_sum_metrics['pursuer_rewards'],
             'reward_sum': rewards_sum
         }
-        if 'nash_metrics' in zero_sum_metrics:
-            zero_sum_data['nash_metric'] = zero_sum_metrics['nash_metrics']
         save_data_to_csv(zero_sum_data, f"{save_dir}/zero_sum_metrics.csv")
     plt.close()
     
@@ -1792,14 +1826,28 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
                        autopct='%1.1f%%', colors=['green', 'red'], startangle=90)
         axes[0, 1].set_title('Test Results Distribution')
     
-    # 3. 평균 보상 추이
-    if 'nash_metrics' in training_stats and training_stats['nash_metrics']:
-        axes[0, 2].plot(training_stats['nash_metrics'], 'g-', linewidth=2)
-        axes[0, 2].set_title('Nash Equilibrium Convergence')
-        axes[0, 2].set_xlabel('Evaluations')
-        axes[0, 2].set_ylabel('Nash Metric')
+    # 3. 평균 보상 추이 (최근 이동 평균)
+    if 'evader_rewards' in training_stats and training_stats['evader_rewards']:
+        evader_series = training_stats['evader_rewards']
+        pursuer_series = training_stats.get('pursuer_rewards', [])
+        episodes = range(len(evader_series))
+        axes[0, 2].plot(episodes, evader_series, label='Evader', color='green', alpha=0.4)
+        if pursuer_series:
+            axes[0, 2].plot(episodes, pursuer_series, label='Pursuer', color='red', alpha=0.4)
+        window = min(100, max(1, len(evader_series) // 10))
+        if len(evader_series) >= window:
+            evader_ma = moving_average(evader_series, window)
+            axes[0, 2].plot(range(window - 1, len(evader_series)), evader_ma, color='darkgreen', linewidth=2, label='Evader MA')
+        if pursuer_series and len(pursuer_series) >= window:
+            pursuer_ma = moving_average(pursuer_series, window)
+            axes[0, 2].plot(range(window - 1, len(pursuer_series)), pursuer_ma, color='darkred', linewidth=2, label='Pursuer MA')
+        axes[0, 2].set_title('Reward Trends')
+        axes[0, 2].set_xlabel('Episodes')
+        axes[0, 2].set_ylabel('Reward')
         axes[0, 2].grid(True, alpha=0.3)
-        axes[0, 2].set_ylim(0, 1)
+        axes[0, 2].legend(loc='best')
+    else:
+        axes[0, 2].axis('off')
     
     # 4. Delta-V 사용량 분포
     delta_vs = []
@@ -1828,24 +1876,16 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
     success_rate = success_count / len(test_results) if test_results else 0
     avg_delta_v = np.mean(delta_vs) if delta_vs else 0
     avg_distance = np.mean(distances) if distances else 0
-    nash_metric = (
-        training_stats.get('nash_metrics', [0])[-1]
-        if 'nash_metrics' in training_stats and training_stats['nash_metrics']
-        else 0
-    )
-
     summary_text = (
         "Training Episodes: {episodes}\n"
         "Test Success Rate: {success_rate}\n"
         "Avg Delta-V: {avg_delta_v}\n"
-        "Avg Distance: {avg_distance}\n"
-        "Nash Metric: {nash_metric:.3f}"
+        "Avg Distance: {avg_distance}"
     ).format(
         episodes=training_stats.get('episodes_completed', 'N/A'),
         success_rate=f"{success_rate:.1%}" if test_results else 'N/A',
         avg_delta_v=f"{avg_delta_v:.1f} m/s" if delta_vs else 'N/A',
         avg_distance=f"{avg_distance:.0f} m" if distances else 'N/A',
-        nash_metric=nash_metric,
     )
     axes[1, 2].text(0.1, 0.5, summary_text, fontsize=12, verticalalignment='center')
     axes[1, 2].set_title('Performance Summary')
@@ -1859,7 +1899,6 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
         'training_stats': {
             'episodes_completed': int(training_stats.get('episodes_completed', 0)),
             'final_success_rate': float(training_stats.get('success_rates', [0])[-1]) if 'success_rates' in training_stats and training_stats['success_rates'] else 0,
-            'final_nash_metric': float(training_stats.get('nash_metrics', [0])[-1]) if 'nash_metrics' in training_stats and training_stats['nash_metrics'] else 0,
         },
         'test_stats': {
             'total_tests': int(len(test_results)) if test_results else 0,

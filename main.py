@@ -21,7 +21,6 @@ from config.settings import get_config, ProjectConfig
 from environment.pursuit_evasion_env import PursuitEvasionEnv
 from environment.pursuit_evasion_env_ga_stm import PursuitEvasionEnvGASTM
 from training.trainer import SACTrainer, create_trainer
-from training.nash_equilibrium import NashEquilibriumTrainer, train_nash_equilibrium_model
 from analysis.evaluator import ModelEvaluator, create_evaluator
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 import torch
@@ -167,24 +166,6 @@ def train_standard_model(
     # 환경 정리
     if hasattr(env, 'close'):
         env.close()
-    
-    return trainer
-
-
-def train_nash_model(config: ProjectConfig, save_path: Optional[str] = None) -> NashEquilibriumTrainer:
-    """Nash Equilibrium 모델 학습"""
-    print("\n=== Nash Equilibrium 모델 학습 시작 ===")
-    
-    # Nash 학습은 단일 환경 사용
-    env = PursuitEvasionEnv(config)
-    
-    trainer = train_nash_equilibrium_model(env, config, experiment_name=config.experiment_name)
-    
-    if save_path:
-        trainer.save_model(save_path)
-    
-    print("Nash Equilibrium 학습 완료")
-    env.close()
     
     return trainer
 
@@ -725,7 +706,7 @@ def main():
     
     # 모드 선택
     parser.add_argument('--mode', type=str, default=None,
-                       choices=['train_standard', 'train_nash', 'evaluate', 'demo', 'compare'],
+                       choices=['train_standard', 'evaluate', 'demo', 'compare'],
                        help='실행 모드 (기본값: 대화형 모드)')
     
     # 학습 관련 인자
@@ -929,9 +910,6 @@ def main():
             if input("\n학습된 모델을 평가하시겠습니까? (y/n): ").lower() == 'y':
                 model_path = f"{trainer.log_dir}/models/{trainer.model_name_prefix}_final.zip"
                 evaluate_model(model_path, config, 5)
-            
-        elif args.mode == 'train_nash':
-            trainer = train_nash_model(config)
             
         elif args.mode == 'evaluate':
             if not args.model_path:

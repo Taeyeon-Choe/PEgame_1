@@ -112,7 +112,8 @@ class SACTrainer:
     def _setup_log_directory(self) -> str:
         """로그 디렉토리 설정 및 생성"""
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_dir = f"{self.paths_config.logs}/{self.experiment_name}_{timestamp}"
+        algo_suffix = getattr(self, "model_name_prefix", "model")
+        log_dir = f"{self.paths_config.logs}/{timestamp}_{algo_suffix}"
         
         self._ensure_log_structure(log_dir)
         
@@ -181,12 +182,6 @@ class SACTrainer:
             if episode_rewards:
                 state["episode_rewards"] = episode_rewards
                 state.setdefault("episode_count", len(episode_rewards))
-
-        # Nash 메트릭
-        if not state.get("nash_metrics"):
-            nash_metrics = self._load_csv_series(plots_dir / "nash_metrics.csv", "nash_metric")
-            if nash_metrics:
-                state["nash_metrics"] = nash_metrics
 
         # 결과 분포
         if not state.get("outcome_counts"):
@@ -465,10 +460,19 @@ class SACTrainer:
     def _get_algorithm_default_params(self) -> Dict[str, Any]:
         """알고리즘별 기본 하이퍼파라미터"""
         if self.algorithm_name == "SAC":
+            action_space = getattr(self.env, "action_space", None)
+            target_entropy = "auto"
+            if action_space is not None and getattr(action_space, "shape", None):
+                try:
+                    action_dim = int(np.prod(action_space.shape))
+                except TypeError:
+                    action_dim = None
+                if action_dim and action_dim > 0:
+                    target_entropy = -0.5 * action_dim
             return {
                 "ent_coef": "auto_0.5",
                 "target_update_interval": 2,
-                "target_entropy": "auto",
+                "target_entropy": target_entropy,
                 "use_sde": False,
                 "use_sde_at_warmup": False,
             }
@@ -801,7 +805,6 @@ class SACTrainer:
                     "episodes_completed": callback.episode_count,
                     "success_rates": callback.success_rates,
                     "outcomes": callback.outcomes,
-                    "nash_metrics": callback.nash_equilibrium_metrics,
                 })
                 break
 
