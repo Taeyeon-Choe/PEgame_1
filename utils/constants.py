@@ -45,7 +45,7 @@ ENV_PARAMS = {
     "c": 0.01,  # 제어 비용 계수
     "max_steps": 1200,  # 최대 스텝 수 (dt*max_steps = 18000s = 300min)
     "max_delta_v_budget": 250.0,  # 최대 추진제 예산 (m/s)
-    "max_initial_separation": 4e3,  # 최대 초기 분리 거리 (m)
+    "max_initial_separation": 5e3,  # 최대 초기 분리 거리 (m)
     "use_rk4": True,
     "use_gastm": True,
     # === Reward / LQ Zero-Sum options ===
@@ -57,7 +57,7 @@ ENV_PARAMS = {
     "lqr_horizon": 10,
     "lqr_Q_diag": [0.0001, 0.0001, 0.0001, 0.05, 0.05, 0.05],
     "lqr_QN_diag": [0.0005, 0.0005, 0.0005, 0.01, 0.01, 0.01],
-    "lqr_R_diag": [1, 1, 1],
+    "lqr_R_diag": [10, 10, 10],
     "use_huber_stage": False,
     "use_rayleigh_stage_scaling": True,
     "stage_huber_pos_delta": None,
@@ -87,7 +87,7 @@ TRAINING_PARAMS = {
     "learning_rate": 0.0003,
     "buffer_size": 1000000,
     "batch_size": 512,
-    "tau": 0.005,
+    "tau": 0.003,
     "gamma": 0.995,
     "net_arch": [256, 256, 256],
     "save_freq": 10000,

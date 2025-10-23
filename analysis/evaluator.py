@@ -5,6 +5,7 @@
 import numpy as np
 import os
 import datetime
+import csv
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
 from stable_baselines3 import SAC
@@ -156,9 +157,16 @@ class ModelEvaluator:
         states = []
         actions_e = []
         actions_p = []
+        command_actions_e = []
         times = []
         evader_eci = []
         pursuer_eci = []
+        evader_impulse_steps = []
+        evader_impulse_times = []
+        evader_impulse_values = []
+        pursuer_impulse_steps = []
+        pursuer_impulse_times = []
+        pursuer_impulse_values = []
         rewards = {'evader': [], 'pursuer': []}
         step_count = 0
         
@@ -180,12 +188,34 @@ class ModelEvaluator:
             # 상태 및 액션 기록
             phys_state = self.env.state.copy()
             
-            action_e = self.env._denormalize_action(normalized_action)
-            action_p = self.env.pursuer_last_action.copy() if hasattr(self.env, 'pursuer_last_action') else np.zeros(3)
+            command_action_e = self.env._denormalize_action(normalized_action)
+            evader_action_step = bool(info.get('evader_action_step', False))
+            pursuer_action_step = bool(info.get('pursuer_action_step', False))
+
+            evader_delta_v = np.array(
+                info.get('evader_delta_v_vector', np.zeros(3)), dtype=np.float32
+            )
+            pursuer_delta_v = np.array(
+                info.get('pursuer_delta_v_vector', np.zeros(3)), dtype=np.float32
+            )
             
             states.append(phys_state.copy())
-            actions_e.append(action_e.copy())
-            actions_p.append(action_p.copy())
+            command_actions_e.append(command_action_e.copy())
+            actions_e.append(evader_delta_v.copy())
+            actions_p.append(pursuer_delta_v.copy())
+
+            step_index = step_count - 1
+            current_time = float(self.env.t)
+
+            if evader_action_step and np.linalg.norm(evader_delta_v) > 0.0:
+                evader_impulse_steps.append(step_index)
+                evader_impulse_times.append(current_time)
+                evader_impulse_values.append(evader_delta_v.copy())
+
+            if pursuer_action_step and np.linalg.norm(pursuer_delta_v) > 0.0:
+                pursuer_impulse_steps.append(step_index)
+                pursuer_impulse_times.append(current_time)
+                pursuer_impulse_values.append(pursuer_delta_v.copy())
 
             r_e, v_e = self.env.evader_orbit.get_position_velocity(self.env.t)
             r_p, v_p = lvlh_to_eci(r_e, v_e, self.env.state)
@@ -197,6 +227,7 @@ class ModelEvaluator:
         states = np.array(states)
         actions_e = np.array(actions_e)
         actions_p = np.array(actions_p)
+        command_actions_e = np.array(command_actions_e)
         times = np.array(times)
         evader_eci = np.array(evader_eci)
         pursuer_eci = np.array(pursuer_eci)
@@ -258,8 +289,46 @@ class ModelEvaluator:
             'ephemeris_eci': (times, evader_eci, pursuer_eci),
             'rewards': rewards,
             'info': info,
-            'step_count': step_count
+            'step_count': step_count,
+            'commands': {
+                'evader': command_actions_e,
+            },
+            'impulses': {
+                'evader': {
+                    'step_indices': evader_impulse_steps,
+                    'times': evader_impulse_times,
+                    'delta_v': evader_impulse_values,
+                },
+                'pursuer': {
+                    'step_indices': pursuer_impulse_steps,
+                    'times': pursuer_impulse_times,
+                    'delta_v': pursuer_impulse_values,
+                },
+            }
         }
+
+        if hasattr(self.env, "tvlqr_fallback_events"):
+            events = getattr(self.env, "tvlqr_fallback_events", [])
+            scenario_result['tvlqr_fallback_events'] = [
+                {
+                    "index": int(event.get("index", 0)),
+                    "step": int(event.get("step", 0)),
+                    "time": float(event.get("time", 0.0)),
+                    "reason": str(event.get("reason", "")),
+                    "error": str(event.get("error", "")),
+                }
+                for event in events
+            ]
+        else:
+            scenario_result['tvlqr_fallback_events'] = []
+
+        summary = None
+        if hasattr(self.env, "get_tvlqr_fallback_summary"):
+            try:
+                summary = self.env.get_tvlqr_fallback_summary()
+            except Exception:
+                summary = None
+        scenario_result['tvlqr_fallback_summary'] = summary or {}
         
         # 궤적 시각화 및 저장
         if save_trajectory and save_dir and scenario_id:
@@ -414,16 +483,71 @@ class ModelEvaluator:
 
         # Delta-V 기록 저장
         if 'ephemeris_eci' in scenario_result:
-            times = scenario_result['ephemeris_eci'][0]
+            times = np.asarray(scenario_result['ephemeris_eci'][0], dtype=float)
         else:
-            times = np.arange(len(actions_e)) * self.env.dt
+            times = np.arange(len(actions_e), dtype=float) * self.env.dt
+
+        step_indices = np.arange(actions_e.shape[0], dtype=int)
+
+        def _extract_impulse_data(
+            actions: np.ndarray, time_series: np.ndarray, stored: Optional[Dict[str, Any]]
+        ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            mask = np.linalg.norm(actions, axis=1) > 1e-8
+            if stored:
+                stored_steps = stored.get('step_indices', [])
+                stored_times = stored.get('times', [])
+                stored_values = stored.get('delta_v', [])
+                if stored_values:
+                    values = np.asarray(stored_values, dtype=np.float32)
+                    if values.ndim == 1:
+                        values = values.reshape(-1, 3)
+                else:
+                    values = np.zeros((len(stored_steps), 3), dtype=np.float32)
+                if values.size == 0:
+                    values = values.reshape(0, 3)
+                steps = np.asarray(stored_steps, dtype=int)
+                impulse_times = np.asarray(stored_times, dtype=float)
+                if steps.size and impulse_times.size == 0:
+                    impulse_times = time_series[steps]
+                return steps, impulse_times, values
+            steps = np.nonzero(mask)[0]
+            values = actions[mask]
+            if values.size == 0:
+                values = values.reshape(0, 3)
+            impulse_times = time_series[mask]
+            return steps, impulse_times, values
+
+        impulses = scenario_result.get('impulses', {})
+        evader_impulse_steps, evader_impulse_times, evader_impulses = _extract_impulse_data(
+            actions_e,
+            times,
+            impulses.get('evader') if impulses else None,
+        )
+        pursuer_impulse_steps, pursuer_impulse_times, pursuer_impulses = _extract_impulse_data(
+            actions_p,
+            times,
+            impulses.get('pursuer') if impulses else None,
+        )
 
         delta_v_data = {
+            'step_index': step_indices.tolist(),
             'time': times.tolist(),
-            'evader_delta_v': actions_e.tolist(),
-            'evader_delta_v_norm': np.linalg.norm(actions_e, axis=1).tolist(),
-            'pursuer_delta_v': actions_p.tolist(),
-            'pursuer_delta_v_norm': np.linalg.norm(actions_p, axis=1).tolist(),
+            'evader_delta_v_full': actions_e.tolist(),
+            'evader_delta_v_full_norm': np.linalg.norm(actions_e, axis=1).tolist(),
+            'pursuer_delta_v_full': actions_p.tolist(),
+            'pursuer_delta_v_full_norm': np.linalg.norm(actions_p, axis=1).tolist(),
+            'evader_impulses': {
+                'step_index': evader_impulse_steps.tolist(),
+                'time': evader_impulse_times.tolist(),
+                'delta_v': evader_impulses.tolist(),
+                'delta_v_norm': np.linalg.norm(evader_impulses, axis=1).tolist() if evader_impulses.size else [],
+            },
+            'pursuer_impulses': {
+                'step_index': pursuer_impulse_steps.tolist(),
+                'time': pursuer_impulse_times.tolist(),
+                'delta_v': pursuer_impulses.tolist(),
+                'delta_v_norm': np.linalg.norm(pursuer_impulses, axis=1).tolist() if pursuer_impulses.size else [],
+            },
         }
 
         with open(f"{save_dir}/test_{scenario_id}_delta_v.json", "w") as f:
@@ -432,8 +556,30 @@ class ModelEvaluator:
 
         # Delta-V 성분별 그래프 저장
         plot_delta_v_components(
-            actions_e, actions_p, f"{save_dir}/test_{scenario_id}"
+            evader_impulses,
+            pursuer_impulses,
+            f"{save_dir}/test_{scenario_id}",
+            evader_steps=evader_impulse_steps,
+            pursuer_steps=pursuer_impulse_steps,
         )
+
+        fallback_events = scenario_result.get('tvlqr_fallback_events') or []
+        if fallback_events:
+            fallback_csv_path = f"{save_dir}/test_{scenario_id}_tvlqr_fallback.csv"
+            fieldnames = ['index', 'step', 'time', 'reason', 'error']
+            with open(fallback_csv_path, "w", newline="") as csvfile:
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                for event in fallback_events:
+                    row = {key: event.get(key, "") for key in fieldnames}
+                    writer.writerow(row)
+
+        fallback_summary = scenario_result.get('tvlqr_fallback_summary') or {}
+        if fallback_summary:
+            import json
+            summary_path = f"{save_dir}/test_{scenario_id}_tvlqr_fallback_summary.json"
+            with open(summary_path, "w") as f:
+                json.dump(fallback_summary, f, indent=2)
 
     def _save_evaluation_results(self, comprehensive_results: Dict,
                                results: List[Dict],

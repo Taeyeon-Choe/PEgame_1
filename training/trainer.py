@@ -471,8 +471,9 @@ class SACTrainer:
                     target_entropy = -0.5 * action_dim
             return {
                 "ent_coef": "auto_0.5",
+                "ent_coef_lr": 1e-4,
                 "target_update_interval": 2,
-                "target_entropy": target_entropy,
+                "target_entropy": "auto",  # target_entropy if you want to set -0.5*dim(A)
                 "use_sde": False,
                 "use_sde_at_warmup": False,
             }

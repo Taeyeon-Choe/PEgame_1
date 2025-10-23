@@ -110,7 +110,7 @@ class TrainingConfig:
     use_gpu: bool = field(default_factory=lambda: torch.cuda.is_available())
 
     # 로깅 설정
-    log_interval: int = 100
+    log_interval: int = 10
     eval_frequency: int = 10
     verbose: int = 1
 

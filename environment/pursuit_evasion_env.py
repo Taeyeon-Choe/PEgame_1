@@ -630,6 +630,11 @@ class PursuitEvasionEnv(gym.Env):
             "pursuer_action_step": pursuer_acted,
         })
 
+        if hasattr(self, "tvlqr_fallback_count"):
+            info["tvlqr_fallback_count"] = int(getattr(self, "tvlqr_fallback_count", 0))
+            info["tvlqr_last_fallback_reason"] = getattr(self, "tvlqr_last_fallback_reason", None)
+            info["tvlqr_last_fallback_error"] = getattr(self, "tvlqr_last_error", None)
+
         if termination_info:
             outcome = termination_info.get("outcome")
             if outcome is not None:
@@ -925,6 +930,10 @@ class PursuitEvasionEnv(gym.Env):
         """궤도 기반 종료 조건 확인"""
         rho_mag = np.linalg.norm(self.state[:3])
 
+        events = []
+        terminated = False
+        truncated = False
+
         # 1. 포획 상태 추적
         is_captured = rho_mag < self.capture_distance
         self.capture_status_history.append(is_captured)
@@ -933,7 +942,7 @@ class PursuitEvasionEnv(gym.Env):
             capture_ratio = sum(self.capture_status_history) / len(self.capture_status_history)
 
             if capture_ratio > 0.8:
-                self.termination_details = {
+                capture_event = {
                     "outcome": "captured",
                     "evader_reward": -150,
                     "pursuer_reward": 50,
@@ -942,11 +951,12 @@ class PursuitEvasionEnv(gym.Env):
                     "orbit_consistency": f"{capture_ratio:.1%} over {self.complete_orbits} orbits",
                     "game_orbits": self.complete_orbits,
                 }
-                return True, False, self.termination_details
+                events.append(capture_event)
+                terminated = True
 
         # 2. 추진제 소진
         if self.total_delta_v_e > self.max_delta_v_budget:
-            self.termination_details = {
+            fuel_event = {
                 "outcome": "fuel_depleted",
                 "evader_reward": -150,
                 "pursuer_reward": 5,
@@ -955,12 +965,13 @@ class PursuitEvasionEnv(gym.Env):
                 "complete_orbits": self.complete_orbits,
                 "game_orbits": self.complete_orbits,
             }
-            return True, False, self.termination_details
+            events.append(fuel_event)
+            terminated = True
 
         # 3. 최대 단계 초과
         if self.step_count >= self.max_steps:
             norm_distance = min(rho_mag / self.evasion_distance, 1.0)
-            self.termination_details = {
+            max_step_event = {
                 "outcome": "max_steps_reached",
                 "evader_reward": 5 * norm_distance,
                 "pursuer_reward": -5 * norm_distance,
@@ -968,7 +979,8 @@ class PursuitEvasionEnv(gym.Env):
                 "complete_orbits": self.complete_orbits,
                 "game_orbits": self.complete_orbits,
             }
-            return False, True, self.termination_details
+            events.append(max_step_event)
+            truncated = True
 
         # 4. 회피 분석
         if rho_mag > self.evasion_distance:
@@ -976,7 +988,7 @@ class PursuitEvasionEnv(gym.Env):
 
             if len(self.evasion_status_history) >= self.orbital_buffer_evasion:
                 evasion_ratio = sum(self.evasion_status_history) / len(self.evasion_status_history)
-                
+
                 # 90% 이상의 시간 동안 회피 거리 유지 시
                 if evasion_ratio > 0.9 and self.complete_orbits >= 1:
                     # 안전도 분석 수행
@@ -989,12 +1001,12 @@ class PursuitEvasionEnv(gym.Env):
                         min_safety_score = min(self.safety_score_history)
                         avg_safety_score = sum(self.safety_score_history) / len(self.safety_score_history)
 
-                        reward = 10 if (
+                        reward = 100 if (
                             min_safety_score > SAFETY_THRESHOLDS["permanent_evasion"]
                             and self.complete_orbits >= 2
-                        ) else 7
+                        ) else 50
 
-                        self.termination_details = {
+                        evasion_event = {
                             "outcome": "permanent_evasion",
                             "evader_reward": reward,
                             "pursuer_reward": -reward,
@@ -1005,7 +1017,8 @@ class PursuitEvasionEnv(gym.Env):
                             "orbit_consistency": f"{evasion_ratio:.1%} over {self.complete_orbits} orbits",
                             "game_orbits": self.complete_orbits,
                         }
-                        return True, False, self.termination_details
+                        events.append(evasion_event)
+                        terminated = True
         else:
             # 회피 거리 미달 시 히스토리 일부만 제거 (부드러운 전환)
             if len(self.evasion_status_history) > 0:
@@ -1013,6 +1026,25 @@ class PursuitEvasionEnv(gym.Env):
             if len(self.safety_score_history) > 0:
                 self.safety_score_history.popleft()
 
+        if events:
+            priority_order = ["captured", "fuel_depleted", "permanent_evasion", "max_steps_reached"]
+            primary_event = None
+            for outcome in priority_order:
+                primary_event = next((event for event in events if event.get("outcome") == outcome), None)
+                if primary_event is not None:
+                    break
+
+            if primary_event is None:
+                primary_event = events[0]
+
+            termination_details = dict(primary_event)
+            termination_details["events"] = events
+            termination_details["primary_outcome"] = primary_event.get("outcome")
+            termination_details["all_outcomes"] = [event.get("outcome") for event in events]
+            self.termination_details = termination_details
+            return terminated, truncated, self.termination_details
+
+        self.termination_details = {}
         return False, False, {}
 
     def _perform_safety_analysis(self) -> Dict:

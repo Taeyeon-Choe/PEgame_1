@@ -4,7 +4,7 @@ PEgame 환경: GASTMPropagator를 사용한 STM 통합
 """
 
 import numpy as np
-from typing import Dict, Tuple, Optional, Any
+from typing import Dict, Tuple, Optional, Any, List
 from environment.pursuit_evasion_env import PursuitEvasionEnv
 from orbital_mechanics.ga_stm_propagator import GASTMPropagator
 from orbital_mechanics.orbit import ChiefOrbit
@@ -31,6 +31,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
         self.use_gastm = use_gastm
         self.gastm_propagator = None
         self._pending_pursuer_impulse = np.zeros(3, dtype=np.float32)
+        self._reset_tvlqr_logging()
 
     def reset(
         self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
@@ -46,7 +47,42 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
                 config=self.config
             )
         self._pending_pursuer_impulse.fill(0.0)
+        self._reset_tvlqr_logging()
         return obs, info
+
+    def _reset_tvlqr_logging(self):
+        """TVLQR fallback 기록 초기화"""
+        self.tvlqr_fallback_events: List[Dict[str, Any]] = []
+        self.tvlqr_fallback_count: int = 0
+        self.tvlqr_last_fallback_reason: Optional[str] = None
+        self.tvlqr_last_error: Optional[str] = None
+
+    def _record_tvlqr_fallback(self, reason: str, exc: Exception):
+        """TVLQR Fallback 발생 시 기록하고 필요 시 로깅"""
+        self.tvlqr_fallback_count += 1
+        entry = {
+            "index": self.tvlqr_fallback_count,
+            "step": int(getattr(self, "step_count", 0)),
+            "time": float(getattr(self, "t", 0.0)),
+            "reason": reason,
+            "error": str(exc),
+        }
+        self.tvlqr_last_fallback_reason = reason
+        self.tvlqr_last_error = entry["error"]
+        self.tvlqr_fallback_events.append(entry)
+        if self.debug_mode:
+            print(
+                f"[TVLQR][Fallback #{entry['index']}] reason={reason}, "
+                f"step={entry['step']}, t={entry['time']:.2f}s, error={entry['error']}"
+            )
+
+    def get_tvlqr_fallback_summary(self) -> Dict[str, Any]:
+        """TVLQR fallback 요약정보 반환"""
+        return {
+            "count": self.tvlqr_fallback_count,
+            "last_reason": self.tvlqr_last_fallback_reason,
+            "last_error": self.tvlqr_last_error,
+        }
 
     def _simulate_relative_motion(self):
         """상대 운동 시뮬레이션 (모드에 따라 다른 방법 사용)"""
@@ -97,8 +133,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
                 current_time=self.t,
             )
         except Exception as exc:
-            if self.debug_mode:
-                print(f"[TVLQR] Fallback to heuristic due to GA-STM error: {exc}")
+            self._record_tvlqr_fallback("ab_sequence", exc)
             return super().compute_interception_strategy(state)
 
         Q_diag = np.asarray(getattr(self.config, "lqr_Q_diag", [1, 1, 1, 0.05, 0.05, 0.05]), dtype=float)
@@ -116,8 +151,7 @@ class PursuitEvasionEnvGASTM(PursuitEvasionEnv):
                 dv_max=self.delta_v_pmax,
             )
         except Exception as exc:
-            if self.debug_mode:
-                print(f"[TVLQR] Gain computation failed, fallback to heuristic: {exc}")
+            self._record_tvlqr_fallback("gain_compute", exc)
             return super().compute_interception_strategy(state)
 
         dv_cmd = np.nan_to_num(dv_cmd, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32, copy=False)

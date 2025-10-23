@@ -5,7 +5,23 @@
 import numpy as np
 from typing import Dict, List, Tuple, Any
 from scipy import signal
-from utils.constants import SAFETY_THRESHOLDS
+from utils.constants import SAFETY_THRESHOLDS, ENV_PARAMS
+
+try:
+    from config import default_config
+    _ENV_CONFIG = default_config.environment
+except Exception:  # pragma: no cover - 설정 로드 실패 시 기본 파라미터 사용
+    _ENV_CONFIG = None
+
+
+def _get_capture_distance() -> float:
+    """환경 설정에서 포획 거리 가져오기."""
+    return float(getattr(_ENV_CONFIG, "capture_distance", ENV_PARAMS["capture_distance"]))
+
+
+def _get_evasion_distance() -> float:
+    """환경 설정에서 회피 거리 가져오기."""
+    return float(getattr(_ENV_CONFIG, "evasion_distance", ENV_PARAMS["evasion_distance"]))
 
 
 def calculate_performance_metrics(states: np.ndarray, 
@@ -53,6 +69,8 @@ def calculate_distance_metrics(states: np.ndarray) -> Dict[str, float]:
     """거리 관련 메트릭 계산"""
     positions = states[:, :3]
     distances = np.linalg.norm(positions, axis=1)
+    capture_threshold = _get_capture_distance()
+    evasion_threshold = _get_evasion_distance()
     
     metrics = {
         'min_distance': np.min(distances),
@@ -70,11 +88,7 @@ def calculate_distance_metrics(states: np.ndarray) -> Dict[str, float]:
         metrics['distance_trend'] = distance_trend  # 양수면 증가, 음수면 감소
     else:
         metrics['distance_trend'] = 0.0
-    
-    # 임계 거리 교차 횟수
-    capture_threshold = 1000.0
-    evasion_threshold = 50000.0
-    
+    # 임계 거리 교차 횟수    
     metrics['capture_threshold_crossings'] = count_threshold_crossings(distances, capture_threshold)
     metrics['evasion_threshold_crossings'] = count_threshold_crossings(distances, evasion_threshold)
     
@@ -245,7 +259,7 @@ def calculate_safety_metrics(states: np.ndarray, info: Dict[str, Any]) -> Dict[s
     
     # 거리 기반 안전성
     distances = np.linalg.norm(states[:, :3], axis=1)
-    capture_distance = 1000.0
+    capture_distance = _get_capture_distance()
     
     # 안전 마진
     min_safety_margin = np.min(distances) - capture_distance

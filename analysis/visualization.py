@@ -13,8 +13,24 @@ import os
 import json
 import csv
 
-from utils.constants import PLOT_PARAMS, SAFETY_THRESHOLDS, R_EARTH
+from utils.constants import PLOT_PARAMS, SAFETY_THRESHOLDS, R_EARTH, ENV_PARAMS
 from scipy.io import savemat
+
+try:
+    from config import default_config
+    _ENV_CONFIG = default_config.environment
+except Exception:  # pragma: no cover - 설정 로드 실패 시 기본 파라미터 사용
+    _ENV_CONFIG = None
+
+
+def _get_capture_distance() -> float:
+    """환경 설정에서 포획 거리 가져오기."""
+    return float(getattr(_ENV_CONFIG, "capture_distance", ENV_PARAMS["capture_distance"]))
+
+
+def _get_evasion_distance() -> float:
+    """환경 설정에서 회피 거리 가져오기."""
+    return float(getattr(_ENV_CONFIG, "evasion_distance", ENV_PARAMS["evasion_distance"]))
 
 def _json_ready(value):
     if isinstance(value, (np.floating, float)):
@@ -679,7 +695,11 @@ def plot_delta_v_per_episode(delta_v_values: List[float], save_dir: str, window:
 
 
 def plot_delta_v_components(
-    actions_e: np.ndarray, actions_p: np.ndarray, save_path: str
+    actions_e: np.ndarray,
+    actions_p: np.ndarray,
+    save_path: str,
+    evader_steps: Optional[np.ndarray] = None,
+    pursuer_steps: Optional[np.ndarray] = None,
 ) -> None:
     """Evader와 Pursuer의 Delta-V 성분 그래프를 저장.
 
@@ -689,6 +709,8 @@ def plot_delta_v_components(
         actions_e: 회피자의 Delta-V 배열 (step x 3)
         actions_p: 추격자의 Delta-V 배열 (step x 3)
         save_path: 저장할 파일 경로 (확장자 제외)
+        evader_steps: 회피자 Δv가 적용된 실제 스텝 인덱스
+        pursuer_steps: 추격자 Δv가 적용된 실제 스텝 인덱스
     """
     setup_matplotlib()
 
@@ -702,7 +724,22 @@ def plot_delta_v_components(
     if actions_p.ndim != 2 or actions_p.shape[1] != 3:
         raise ValueError("actions_p must be of shape (steps, 3)")
 
-    steps = np.arange(actions_e.shape[0])
+    steps_e = (
+        np.asarray(evader_steps, dtype=float)
+        if evader_steps is not None
+        else np.arange(actions_e.shape[0], dtype=float)
+    )
+    steps_p = (
+        np.asarray(pursuer_steps, dtype=float)
+        if pursuer_steps is not None
+        else np.arange(actions_p.shape[0], dtype=float)
+    )
+
+    if steps_e.shape[0] != actions_e.shape[0]:
+        raise ValueError("evader_steps 길이는 actions_e와 동일해야 합니다.")
+    if steps_p.shape[0] != actions_p.shape[0]:
+        raise ValueError("pursuer_steps 길이는 actions_p와 동일해야 합니다.")
+
     labels = ['vx', 'vy', 'vz']
     colors = ['tab:blue', 'tab:orange', 'tab:green']
 
@@ -712,9 +749,9 @@ def plot_delta_v_components(
     # Evader plot
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
     for i, (label, color) in enumerate(zip(labels, colors)):
-        plt.plot(steps, actions_e[:, i], label=label, color=color, linewidth=1.0)
-    plt.plot(steps, evader_mag, label='|Δv|', color='black', linestyle='--', linewidth=1.5)
-    plt.xlabel('Step')
+        plt.plot(steps_e, actions_e[:, i], label=label, color=color, linewidth=1.0)
+    plt.plot(steps_e, evader_mag, label='|Δv|', color='black', linestyle='--', linewidth=1.5)
+    plt.xlabel('Step Index')
     plt.ylabel('Delta-V (m/s)')
     plt.title('Evader Delta-V Components')
     plt.legend()
@@ -723,7 +760,7 @@ def plot_delta_v_components(
     plt.close()
 
     evader_data = {
-        'step': steps.tolist(),
+        'step': steps_e.tolist(),
         'dv_vx': actions_e[:, 0].tolist(),
         'dv_vy': actions_e[:, 1].tolist(),
         'dv_vz': actions_e[:, 2].tolist(),
@@ -734,9 +771,9 @@ def plot_delta_v_components(
     # Pursuer plot
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
     for i, (label, color) in enumerate(zip(labels, colors)):
-        plt.plot(steps, actions_p[:, i], label=label, color=color, linewidth=1.0)
-    plt.plot(steps, pursuer_mag, label='|Δv|', color='black', linestyle='--', linewidth=1.5)
-    plt.xlabel('Step')
+        plt.plot(steps_p, actions_p[:, i], label=label, color=color, linewidth=1.0)
+    plt.plot(steps_p, pursuer_mag, label='|Δv|', color='black', linestyle='--', linewidth=1.5)
+    plt.xlabel('Step Index')
     plt.ylabel('Delta-V (m/s)')
     plt.title('Pursuer Delta-V Components')
     plt.legend()
@@ -745,7 +782,7 @@ def plot_delta_v_components(
     plt.close()
 
     pursuer_data = {
-        'step': steps.tolist(),
+        'step': steps_p.tolist(),
         'dv_vx': actions_p[:, 0].tolist(),
         'dv_vy': actions_p[:, 1].tolist(),
         'dv_vz': actions_p[:, 2].tolist(),
@@ -917,13 +954,23 @@ def plot_distance_evolution(states: np.ndarray, save_path: Optional[str] = None)
     """거리 변화 그래프"""
     distances = np.sqrt(np.sum(states[:, :3]**2, axis=1))
     time_steps = np.arange(len(distances))
+    capture_distance = _get_capture_distance()
+    evasion_distance = _get_evasion_distance()
     
     plt.figure(figsize=PLOT_PARAMS['figure_size_2d'])
     plt.plot(time_steps, distances, color=PLOT_PARAMS['colors']['trajectory'], linewidth=2)
-    plt.axhline(y=1000, color=PLOT_PARAMS['colors']['pursuer'], 
-               linestyle='--', label='Capture Distance (1000m)')
-    plt.axhline(y=5000, color=PLOT_PARAMS['colors']['evader'], 
-               linestyle='--', label='Evasion Distance (5000m)')
+    plt.axhline(
+        y=capture_distance,
+        color=PLOT_PARAMS['colors']['pursuer'],
+        linestyle='--',
+        label=f'Capture Distance ({capture_distance:.0f}m)',
+    )
+    plt.axhline(
+        y=evasion_distance,
+        color=PLOT_PARAMS['colors']['evader'],
+        linestyle='--',
+        label=f'Evasion Distance ({evasion_distance:.0f}m)',
+    )
     plt.xlabel('Time Steps')
     plt.ylabel('Distance (m)')
     plt.title('Distance Between Pursuer and Evader')
@@ -959,6 +1006,7 @@ def plot_test_results(results: List[Dict],
     success = [r['success'] for r in results]
     distances = [r['final_distance_m'] for r in results]
     evader_dvs = [r['evader_total_delta_v_ms'] for r in results]
+    capture_distance = _get_capture_distance()
     
     # 1. 최종 거리와 Delta-V 사용량 그래프
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
@@ -967,7 +1015,12 @@ def plot_test_results(results: List[Dict],
     colors = [PLOT_PARAMS['colors']['success'] if s else PLOT_PARAMS['colors']['failure'] 
              for s in success]
     axes[0].bar(range(len(distances)), distances, color=colors, alpha=0.7)
-    axes[0].axhline(y=1000, color='r', linestyle='--', label='Capture Distance (1000m)')
+    axes[0].axhline(
+        y=capture_distance,
+        color='r',
+        linestyle='--',
+        label=f'Capture Distance ({capture_distance:.0f}m)',
+    )
     axes[0].set_xlabel('Test Run')
     axes[0].set_ylabel('Final Distance (m)')
     axes[0].set_title('Final Distance by Test Run')
@@ -1775,6 +1828,8 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
                            save_dir: str):
     """종합 대시보드 생성"""
     setup_matplotlib()
+    capture_distance = _get_capture_distance()
+    evasion_distance = _get_evasion_distance()
     
     os.makedirs(save_dir, exist_ok=True)
     
@@ -1864,7 +1919,10 @@ def create_summary_dashboard(training_stats: Dict, test_results: List[Dict],
     if test_results:
         distances = [r['final_distance_m'] for r in test_results]
         _safe_hist(axes[1, 1], distances, bins=10, color='green', alpha=0.7, edgecolor='black')
-        axes[1, 1].axvline(x=1000, color='r', linestyle='--', label='Capture Threshold')
+        axes[1, 1].axvline(x=capture_distance, color='r', linestyle='--',
+                           label=f'Capture Threshold ({capture_distance:.0f}m)')
+        axes[1, 1].axvline(x=evasion_distance, color='g', linestyle='--',
+                           label=f'Evasion Threshold ({evasion_distance:.0f}m)')
         axes[1, 1].set_title('Final Distance Distribution')
         axes[1, 1].set_xlabel('Distance (m)')
         axes[1, 1].set_ylabel('Frequency')
